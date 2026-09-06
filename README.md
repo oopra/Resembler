@@ -165,9 +165,20 @@ authenticate to.
 
 ## Deploying
 
-Any static host. Built for **Cloudflare Pages**: point it at the repo, no build command, output
-directory `/`. `_headers` sets a Content-Security-Policy with no `connect-src` beyond `self` — there
-is nowhere for a photo to go, and the browser enforces it.
+Any static host — there is no build step, so the repo *is* the site.
+
+**GitHub Pages.** Settings → Pages → Deploy from a branch → `main`, folder `/ (root)`. The
+`.nojekyll` file at the root matters: without it Pages pipes everything through Jekyll on the way
+out, which has its own ideas about directories called `vendor/` — and `vendor/` is where the entire
+face-mesh runtime lives. (`.github/workflows/pages.yml` is there for the "GitHub Actions" source
+option instead; either route works.)
+
+**Cloudflare Pages.** Point it at the repo, no build command, output directory `/`. This is the only
+host where `_headers` takes effect, giving a Content-Security-Policy with no `connect-src` beyond
+`self` — there is nowhere for a photo to go, and the browser enforces it.
+
+Whichever you pick, it must be served over HTTPS (or localhost). Service workers are refused on plain
+HTTP, and without one there is no offline mode and no install.
 
 ## Layout
 
