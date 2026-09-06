@@ -1,0 +1,22 @@
+# Cloudflare Pages headers.
+
+/*
+  # The page loads nothing from anywhere else — no CDN, no web font, no analytics — so it can say so
+  # and have the browser enforce it. `img-src data:` is for the inline SVG favicon and the prepared
+  # face crops, which are canvas data URLs; `blob:` is for decoding the picked file.
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  # Nothing here needs a camera, a microphone or a location, and photos of a family are the wrong
+  # thing to leave those doors open around.
+  Permissions-Policy: camera=(self), microphone=(), geolocation=(), interest-cohort=()
+
+# App code has no cache-busting hash, so revalidate (cheap 304s) rather than serving a stale deploy.
+/js/*
+  Cache-Control: public, max-age=0, must-revalidate
+/css/*
+  Cache-Control: public, max-age=0, must-revalidate
+/
+  Cache-Control: public, max-age=0, must-revalidate
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate

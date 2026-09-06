@@ -1,0 +1,190 @@
+/* styles.css — one stylesheet, no framework, no web fonts (nothing to fetch, nothing to block).
+   Dark by default because photos read better against it; light when the device asks. */
+
+:root{
+  --bg:#14110f; --panel:#1e1a17; --panel-2:#262120; --line:#332c27;
+  --ink:#f2e9e0; --muted:#a2958a;
+  --accent:#d98b6a; --accent-ink:#1b1512;
+  --ok:#7fa08c; --warn:#d3a44e; --bad:#c96a52;
+  --shadow:0 1px 0 rgba(255,255,255,.04), 0 8px 28px rgba(0,0,0,.35);
+  --tone-a:#d98b6a; --tone-b:#7fa08c; --tone-c:#b58ac0; --tone-d:#78a0c4; --tone-e:#cfa356; --tone-f:#c97f8f;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#faf5ef; --panel:#ffffff; --panel-2:#f4ece3; --line:#e5d9cc;
+    --ink:#2a211b; --muted:#6d6055;
+    --accent:#b8613d; --accent-ink:#fff8f3;
+    --ok:#4a7358; --warn:#966b12; --bad:#a8412c;
+    --shadow:0 1px 0 rgba(255,255,255,.7), 0 6px 20px rgba(60,40,25,.10);
+    --tone-a:#b8613d; --tone-b:#4a7358; --tone-c:#79508a; --tone-d:#3f6c95; --tone-e:#8a6516; --tone-f:#9a4c5e;
+  }
+}
+
+*{ box-sizing:border-box; }
+/* Several things here are hidden by attribute while also carrying a display rule, and an author
+   `display:grid` beats the user agent's `[hidden] { display:none }`. This settles it. */
+[hidden]{ display:none !important; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0; padding:0 16px 72px; background:var(--bg); color:var(--ink);
+  font:16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main, .masthead, .footnote{ max-width:860px; margin:0 auto; }
+
+/* ---------- masthead ---------- */
+.masthead{ padding:38px 0 12px; }
+.masthead h1{
+  margin:0; font-size:30px; line-height:1.15; letter-spacing:-.01em;
+  font-family:ui-serif, Georgia, "Times New Roman", serif; font-weight:650;
+  display:flex; align-items:center; gap:12px;
+}
+.logo{ width:30px; height:22px; flex:0 0 auto; position:relative; }
+.logo::before, .logo::after{
+  content:''; position:absolute; top:0; width:20px; height:20px; border-radius:50%; border:2.6px solid var(--accent);
+}
+.logo::before{ left:0; }
+.logo::after{ left:8px; border-color:var(--ok); }
+.tagline{ margin:10px 0 0; color:var(--muted); max-width:60ch; }
+
+/* ---------- steps ---------- */
+.step{
+  margin:26px 0; padding:20px 18px; background:var(--panel);
+  border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
+}
+.step h2{
+  margin:0 0 6px; font-size:17px; letter-spacing:.01em; font-weight:650;
+  display:flex; align-items:center; gap:10px;
+}
+.step-n{
+  flex:0 0 auto; width:24px; height:24px; border-radius:50%; background:var(--panel-2);
+  border:1px solid var(--line); color:var(--accent);
+  font-size:12.5px; display:grid; place-items:center; font-variant-numeric:tabular-nums;
+}
+.hint{ margin:0 0 14px; color:var(--muted); font-size:13.5px; line-height:1.55; max-width:66ch; }
+.sub{ font-size:14px; margin:26px 0 10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+
+/* ---------- buttons ---------- */
+button{ font:inherit; cursor:pointer; border-radius:9px; border:1px solid var(--line); }
+button:disabled{ opacity:.45; cursor:not-allowed; }
+button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.primary{
+  background:var(--accent); color:var(--accent-ink); border-color:transparent;
+  padding:13px 22px; font-size:16px; font-weight:600; width:100%;
+}
+.ghost{ background:transparent; color:var(--ink); padding:9px 14px; font-size:14px; }
+.ghost:hover{ border-color:var(--accent); color:var(--accent); }
+.tiny{ background:var(--panel-2); color:var(--muted); padding:5px 9px; font-size:12px; line-height:1.2; }
+.tiny:hover{ color:var(--ink); border-color:var(--muted); }
+
+/* ---------- photo cards ---------- */
+.slots{ display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:14px; margin-bottom:12px; }
+#childSlots{ grid-template-columns:minmax(190px, 260px); }
+.card{ background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:10px; }
+.card-child{ border-color:var(--accent); }
+.card-head{ display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+.name-in{
+  flex:1 1 auto; min-width:0; font:inherit; font-size:14px; font-weight:600; color:var(--ink);
+  background:transparent; border:none; border-bottom:1px dashed var(--line); padding:3px 2px;
+}
+.name-in::placeholder{ color:var(--muted); font-weight:400; }
+.x{ flex:0 0 auto; background:transparent; color:var(--muted); border:none; font-size:20px; line-height:1; padding:0 5px; }
+.x:hover{ color:var(--bad); }
+
+.frame{
+  position:relative; width:100%; aspect-ratio:1/1; border-radius:10px; overflow:hidden;
+  background:var(--panel); border:1px solid var(--line); display:grid; place-items:center;
+  touch-action:none; user-select:none;
+}
+.frame.has-photo{ cursor:grab; }
+.frame.grabbing{ cursor:grabbing; }
+.preview{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+.empty{ position:relative; display:grid; place-items:center; gap:4px; color:var(--muted); font-size:13px; text-align:center; }
+.plus{ font-size:26px; line-height:1; color:var(--accent); }
+/* An oval guide showing roughly where a head should sit — the framing hint that stops people
+   sending a photo of a whole room. */
+/* Only useful once there is a photo to line up against — over a blank panel it is just clutter.
+   White dashed with a dark shadow so it reads on a bright cheek and on dark hair alike. */
+.guide{ display:none; position:absolute; left:50%; top:50%; width:66%; height:82%; transform:translate(-50%,-50%);
+  border:1px dashed rgba(255,255,255,.5); border-radius:50%; pointer-events:none;
+  filter:drop-shadow(0 0 1px rgba(0,0,0,.6)); }
+.frame.has-photo .guide{ display:block; }
+
+.tools{ margin-top:8px; display:grid; gap:7px; }
+.zoom{ width:100%; accent-color:var(--accent); }
+.tool-row{ display:flex; flex-wrap:wrap; gap:5px; }
+.warn{ margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--warn); }
+
+/* ---------- passes ---------- */
+.passes{ border:1px solid var(--line); border-radius:10px; padding:10px 12px 12px; margin:0 0 12px; }
+.passes legend{ font-size:12.5px; color:var(--muted); padding:0 6px; }
+.passes label{ display:flex; align-items:center; gap:9px; padding:6px 2px; cursor:pointer; }
+.passes input{ accent-color:var(--accent); }
+.passes span{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; font-size:14.5px; }
+.passes em{ color:var(--muted); font-style:normal; font-size:12.5px; }
+
+.status{ margin:12px 0 0; font-size:14px; color:var(--muted); min-height:1.2em; }
+.status.bad{ color:var(--bad); }
+.status.note{ color:var(--warn); }
+
+/* ---------- results ---------- */
+.verdict{ border-left:3px solid var(--muted); padding:2px 0 2px 14px; margin:4px 0 20px; }
+.verdict.v-clear{ border-color:var(--ok); }
+.verdict.v-lean{ border-color:var(--accent); }
+.verdict.v-mix{ border-color:var(--warn); }
+.verdict.v-only{ border-color:var(--muted); }
+.v-lead{ margin:0; font-size:26px; line-height:1.2; font-family:ui-serif, Georgia, serif; font-weight:650; }
+.v-sub{ margin:6px 0 0; color:var(--muted); font-size:14px; }
+
+.lineup{ display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start; margin-bottom:16px; }
+.line-child{ display:grid; gap:6px; justify-items:center; width:104px; }
+.line-child img{ width:104px; height:104px; border-radius:10px; border:2px solid var(--accent); display:block; }
+.line-name{ font-size:13px; font-weight:600; }
+.line-rows{ display:grid; gap:10px; }
+.line-row{ display:grid; grid-template-columns:56px 1fr; gap:10px; align-items:center; }
+.line-row img{ width:56px; height:56px; border-radius:8px; border:1px solid var(--line); display:block; }
+.line-row.leads img{ border-color:currentColor; border-width:2px; }
+.line-body{ min-width:0; }
+.line-top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.line-share{ font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; }
+.line-raw{ font-size:11.5px; color:var(--muted); margin-top:2px; }
+.bar{ display:block; height:8px; border-radius:99px; background:var(--panel-2); overflow:hidden; margin-top:5px; border:1px solid var(--line); }
+.bar span{ display:block; height:100%; background:currentColor; border-radius:99px; }
+
+.tone-a{ color:var(--tone-a); } .tone-b{ color:var(--tone-b); } .tone-c{ color:var(--tone-c); }
+.tone-d{ color:var(--tone-d); } .tone-e{ color:var(--tone-e); } .tone-f{ color:var(--tone-f); }
+.line-row .line-name, .line-row .line-share{ color:var(--ink); }
+
+.mix-line{ font-size:15px; line-height:1.7; padding:12px 14px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px; }
+.mix-line .shared{ color:var(--muted); font-size:13.5px; }
+
+.feature-table{ display:grid; gap:2px; }
+.frow{ padding:12px 0; border-top:1px solid var(--line); }
+.frow-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }
+.fname{ font-weight:600; font-size:14.5px; }
+.fchip{ font-size:11.5px; padding:3px 9px; border-radius:99px; border:1px solid currentColor; white-space:nowrap; }
+.chip-shared, .chip-shaky, .chip-none{ color:var(--muted); }
+.chip-shaky{ color:var(--warn); }
+.fbars{ display:grid; gap:5px; }
+.fbar{ display:grid; grid-template-columns:minmax(58px, 22%) 1fr 34px; gap:9px; align-items:center; font-size:12.5px; }
+.fbar-name{ color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fbar.win .fbar-name{ color:var(--ink); font-weight:600; }
+.fbar-v{ text-align:right; color:var(--muted); font-variant-numeric:tabular-nums; }
+.fbar .bar{ margin-top:0; }
+.fnote{ margin:9px 0 0; font-size:13px; color:var(--muted); font-style:italic; }
+
+.caveats{ margin-top:22px; }
+.caveats ul{ margin:0; padding-left:20px; }
+.caveats li{ font-size:13px; color:var(--muted); margin-bottom:6px; line-height:1.55; }
+.result-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:24px; }
+.provenance{ margin:12px 0 0; font-size:11.5px; color:var(--muted); }
+
+/* ---------- footer ---------- */
+.footnote{ margin-top:34px; padding-top:18px; border-top:1px solid var(--line); }
+.footnote p{ font-size:12.5px; line-height:1.65; color:var(--muted); max-width:70ch; }
+
+@media (max-width:520px){
+  .masthead h1{ font-size:25px; }
+  .v-lead{ font-size:22px; }
+  .lineup{ grid-template-columns:1fr; }
+  .line-child{ width:100%; justify-items:start; }
+}

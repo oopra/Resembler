@@ -1,0 +1,15 @@
+{
+  "name": "resembler",
+  "version": "1.0.0",
+  "description": "Compare family photos and see who the little one takes after, feature by feature.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint js/ functions/",
+    "check": "for f in js/*.js; do node --check \"$f\" || exit 1; done"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "playwright": "^1.56.0"
+  }
+}
