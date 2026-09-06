@@ -331,3 +331,59 @@ test('the vendored face mesh actually loads and starts from these files alone', 
   assert.match(started.first, /face-mesh runtime/);
   assert.deepEqual(page.__errors, []);
 });
+
+/* ---------- it is an app ---------- */
+
+test('the install offer appears only when there is something to install', async () => {
+  assert.equal(await page.isHidden('#installRow'), true, 'nothing offered until the browser says so');
+  // Chromium fires beforeinstallprompt itself only under conditions a test server cannot meet, so
+  // the event is delivered by hand; what is under test is the app's reaction to it.
+  await page.evaluate(() => {
+    const e = new Event('beforeinstallprompt');
+    e.prompt = () => { window.__prompted = true; };
+    e.userChoice = Promise.resolve({ outcome: 'accepted' });
+    window.dispatchEvent(e);
+  });
+  assert.equal(await page.isHidden('#installRow'), false);
+  assert.match(await page.textContent('#installWhy'), /never leave the device/);
+  await page.click('#installBtn');
+  assert.equal(await page.evaluate(() => window.__prompted), true, 'the button raises the real prompt');
+  await page.evaluate(() => window.dispatchEvent(new Event('appinstalled')));
+  assert.equal(await page.isHidden('#installRow'), true, 'and stops asking once installed');
+});
+
+test('iOS gets the gesture spelled out, since Safari offers no install event', async () => {
+  const ios = await browser.newPage({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
+  await ios.goto(srv.url + '/index.html', { waitUntil: 'domcontentloaded' });
+  assert.equal(await ios.isHidden('#installRow'), false);
+  assert.equal(await ios.isHidden('#installBtn'), true, 'no button, because there is no prompt to raise');
+  assert.match(await ios.textContent('#installWhy'), /Add to Home Screen/);
+  await ios.close();
+});
+
+test('installed, it runs with the network off — page, mesh and all', async () => {
+  // The whole claim of "it is an app" rests on this: pull the network and it still works.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.evaluate(() => rxLoadMesh());
+  const cached = await page.evaluate(async () => {
+    const out = [];
+    for (const n of await caches.keys()) out.push(...(await (await caches.open(n)).keys()).map((r) => new URL(r.url).pathname));
+    return out;
+  });
+  assert.ok(cached.includes('/models/face_landmarker.task'), 'the model is cached');
+  assert.ok(cached.includes('/vendor/mediapipe/wasm/vision_wasm_internal.wasm'), 'so is the runtime');
+  assert.ok(cached.includes('/index.html') && cached.includes('/js/app.js'), 'and the app itself');
+
+  await page.context().setOffline(true);
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const off = await page.evaluate(async () => {
+      await rxLoadMesh();
+      return { cards: document.querySelectorAll('.card').length, mesh: !!rxMeshState.landmarker };
+    });
+    assert.equal(off.cards, 3, 'the app boots offline');
+    assert.equal(off.mesh, true, 'and the face mesh starts from cache, with no network at all');
+  } finally {
+    await page.context().setOffline(false);
+  }
+});

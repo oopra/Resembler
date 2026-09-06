@@ -10,7 +10,8 @@ const VERSION = 'v1';
 const SHELL = 'shell-' + VERSION;
 const HEAVY = 'mesh-' + VERSION;
 const CORE = ['./', './index.html', './css/styles.css', './js/faces.js', './js/measure.js',
-              './js/mesh.js', './js/resemble.js', './js/app.js', './manifest.webmanifest'];
+              './js/mesh.js', './js/resemble.js', './js/app.js', './manifest.webmanifest',
+              './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));

@@ -628,6 +628,62 @@ function rxCopyResult(){
   }else{ done(false); }
 }
 
+/* ============================ installing it ============================ */
+
+/* It has been installable all along — a manifest, a service worker and a full offline cache — but
+   nothing on the page said so, and "add to home screen" is buried three menus deep on every
+   platform. So: a real button where the browser offers one, and the actual gesture spelled out
+   where it does not (iOS gives no install event at all, only the Share sheet). */
+var rxInstallPrompt = null;
+
+function rxStandalone(){
+  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+         navigator.standalone === true;
+}
+function rxIsIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);   // iPadOS reports as a Mac
+}
+
+function rxInstallUI(){
+  var row = document.getElementById('installRow');
+  var btn = document.getElementById('installBtn');
+  var why = document.getElementById('installWhy');
+  if(!row) return;
+
+  if(rxStandalone()){ row.hidden = true; return; }         // already installed: nothing to offer
+
+  if(rxInstallPrompt){
+    row.hidden = false;
+    btn.hidden = false;
+    why.textContent = 'Keeps working with no signal, and the photos never leave the device.';
+    return;
+  }
+  if(rxIsIOS()){
+    // Safari has no install event; the only route is the Share sheet, so say exactly that.
+    row.hidden = false;
+    btn.hidden = true;
+    why.textContent = 'To install: tap Share, then “Add to Home Screen”.';
+  }
+}
+
+window.addEventListener('beforeinstallprompt', function(e){
+  e.preventDefault();                                       // keep the browser's own mini-infobar out of the way
+  rxInstallPrompt = e;
+  rxInstallUI();
+});
+window.addEventListener('appinstalled', function(){
+  rxInstallPrompt = null;
+  var row = document.getElementById('installRow');
+  if(row) row.hidden = true;
+});
+
+function rxInstall(){
+  if(!rxInstallPrompt) return;
+  rxInstallPrompt.prompt();
+  rxInstallPrompt.userChoice.then(function(){ rxInstallPrompt = null; rxInstallUI(); });
+}
+
 function rxInit(){
   rxChild = rxNewCard('child', '');
   document.getElementById('childSlots').appendChild(rxBuildCard(rxChild, 0));
@@ -640,6 +696,8 @@ function rxInit(){
     document.querySelector('.masthead').scrollIntoView({ behavior: 'smooth' });
   });
   document.getElementById('copyBtn').addEventListener('click', rxCopyResult);
+  document.getElementById('installBtn').addEventListener('click', rxInstall);
+  rxInstallUI();
   rxRefreshCompare();
   if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(function(){});
 }

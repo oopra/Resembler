@@ -124,6 +124,32 @@ Only the SIMD WebAssembly build is shipped, which needs Chrome 91+, Firefox 89+ 
 
 ---
 
+## It is already an app
+
+There is no separate "app version" to build. The page ships a web app manifest, three icons and a
+service worker that caches the whole thing — code, runtime and model — so it installs to the home
+screen or dock and runs with the network off:
+
+| Platform | How |
+| --- | --- |
+| Android | Chrome / Edge / Samsung Internet offer **Install as an app** — the page shows a button when they do |
+| iOS / iPadOS | Safari → Share → **Add to Home Screen** (Safari fires no install event, so the page just says this) |
+| Windows / macOS / Linux | Chrome or Edge → the install icon in the address bar, or the page's own button |
+
+Installed, it opens in its own window with no browser chrome, keeps working with no signal, and still
+never sends a photograph anywhere. There is a test for exactly this: it warms the cache, sets the
+browser offline, reloads, and asserts that both the app and the face mesh start with no network.
+
+What it is *not* is a store listing. See **Native builds** below.
+
+## Native builds
+
+Getting into the App Store and Play Store means wrapping this same web app in
+[Capacitor](https://capacitorjs.com) — the web code is unchanged, and the 16 MB of runtime and model
+ship inside the package, so there is no first-run download at all. That needs Xcode on a Mac for iOS
+and Android Studio for Android, plus the respective developer accounts, and it is not set up in this
+repo. Nothing about the app blocks it.
+
 ## Running it
 
 ```bash

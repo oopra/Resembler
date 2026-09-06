@@ -45,6 +45,8 @@ main, .masthead, .footnote{ max-width:860px; margin:0 auto; }
 .logo::before{ left:0; }
 .logo::after{ left:8px; border-color:var(--ok); }
 .tagline{ margin:10px 0 0; color:var(--muted); max-width:60ch; }
+.install{ margin:14px 0 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.install-why{ font-size:12.5px; color:var(--muted); }
 .badge{ margin:12px 0 0; display:inline-block; font-size:12px; line-height:1.5; color:var(--ok);
   border:1px solid currentColor; border-radius:999px; padding:5px 12px; }
 
