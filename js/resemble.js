@@ -1,182 +1,231 @@
-/* resemble.js — the comparison itself: what gets asked, how the answers get combined, and what
-   verdict comes out the other end. Pure logic: no DOM, no network, no canvas. Everything here is a
-   plain function over plain data so the part that is easy to get quietly wrong — the scoring — can
-   be unit-tested without a browser or an API key.
+/* resemble.js — measurements to a verdict. Pure logic: no DOM, no canvas, no model.
 
-   THE PROBLEM WITH ASKING ONCE. "Who does she look like, Mum or Dad?" is exactly the kind of
-   question a model will answer confidently and inconsistently. Three known ways the answer drifts:
+   WHAT CHANGED, AND WHY IT MATTERS. An earlier version of this app asked a hosted vision model to
+   judge the faces, and most of the machinery here existed to defend against the model: hide the
+   names so "Dad" was not flattered, rotate the running order so the first photo was not flattered,
+   ask repeatedly and see whether the answer held still. None of that is needed any more. Measuring a
+   nose has no opinion about whose nose it is, does not care which photo came first, and gives the
+   same answer every time. The bias defences are gone because the bias is gone.
 
-     • Name bias. Told a photo is "Dad", a model reaches for what it expects a child to share with a
-       father. So names NEVER leave this device. Photos go up labelled A, B, C and come back as
-       A, B, C; the names are re-attached here, afterwards.
-     • Position bias. Whoever is shown first tends to score a little higher. So each pass sends the
-       photos in a different order — a shuffled base rotated one step per pass, which guarantees a
-       given person sits in a different slot every time rather than merely hoping a reshuffle moves
-       them.
-     • Halo. One "she's the image of him" impression bleeds across every feature. So each feature is
-       scored on its own, and features that disagree are reported as disagreeing rather than being
-       smoothed into one number.
+   ONE HONEST WORRY SURVIVES, in a better form. Landmark detection is not perfectly repeatable: nudge
+   the crop and every point shifts a little. So a comparison is run more than once over slightly
+   different crops of the same photos, and the SPREAD between those readings is kept. It is no longer
+   "did the model change its mind" — it is "how firmly is this measurement actually pinned down by
+   these photographs". A feature that wobbles between readings is reported as wobbling.
 
-   WHAT COMES BACK. Per pass, a 0–100 similarity for every (feature, person) pair. Those are averaged
-   across passes; the spread between passes is kept, because a feature that swung 30 points between
-   passes has not been measured, it has been guessed, and the UI says so instead of picking a winner.
+   The thresholds below are the whole of this app's restraint, so they are stated once, here, in
+   points on the 0–100 similarity scale. */
 
-   Not a paternity or identity test — see the note in index.html. This measures what a careful
-   observer would say about two faces, which is a real thing, and is not evidence of anything. */
+/* measure.js supplies RX_MEASURES and rxCompare. In the browser both files are plain scripts sharing
+   one global scope, so they are simply there; under Node's test runner they have to be pulled in.
+   Assigning onto globalThis rather than declaring with `var` keeps the browser's real globals from
+   being shadowed by a hoisted, never-assigned local. */
+if(typeof RX_MEASURES === 'undefined' && typeof require === 'function'){
+  globalThis.RX_MEASURES = require('./measure.js').RX_MEASURES;
+  globalThis.rxCompare = require('./measure.js').rxCompare;
+}
 
-/* ---- the features, and why these ----
-   Ten traits that (a) a person can actually point at in a photo, and (b) survive the age gap between
-   a toddler and an adult. Weights tilt the overall score towards bone structure — nose bridge, eye
-   spacing, jaw, proportions — because that is what stays put as a face grows. Colouring is real and
-   heritable but it is one of the first things a camera gets wrong, so it counts least. */
+var RX_FEATURE_MARGIN = 8;   // a feature is "shared" unless someone leads it by this much
+var RX_CLEAR_GAP     = 10;   // "takes after" needs this overall lead, and every reading agreeing
+var RX_LEAN_GAP      = 4;    // "leans towards" needs this much; below it, a genuine mix
+/* A feature is scored from several measurements. If an expression knocks out most of them, what is
+   left is not really that feature any more — a mouth judged on philtrum length alone is not a mouth.
+   Below this fraction of a feature's weight, it stops being attributable to anyone. */
+var RX_MIN_COVERAGE = 0.5;
+
+/* The eight features, weighted towards bone structure — which is what survives the twenty years
+   between a toddler and an adult — and away from colouring, which a camera gets wrong first.
+   Ears and hairline are deliberately absent: a face mesh stops at the face, so they cannot be
+   measured, and guessing at them would be the dishonest half of the answer. */
 var RX_FEATURES = [
-  { key:'eyes',      label:'Eyes',            short:'eyes',      weight:1.25 },
-  { key:'nose',      label:'Nose',            short:'nose',      weight:1.25 },
-  { key:'shape',     label:'Face shape',      short:'face shape',weight:1.15 },
-  { key:'jaw',       label:'Jaw & chin',      short:'jaw',       weight:1.10 },
-  { key:'mouth',     label:'Mouth & lips',    short:'mouth',     weight:1.00 },
-  { key:'brows',     label:'Eyebrows',        short:'eyebrows',  weight:0.90 },
-  { key:'cheeks',    label:'Cheeks',          short:'cheeks',    weight:0.90 },
-  { key:'ears',      label:'Ears',            short:'ears',      weight:0.70 },
-  { key:'hairline',  label:'Hairline & hair', short:'hairline',  weight:0.70 },
-  { key:'colouring', label:'Colouring',       short:'colouring', weight:0.60 }
+  { key:'eyes',   label:'Eyes',             short:'eyes',       weight:1.25 },
+  { key:'nose',   label:'Nose',             short:'nose',       weight:1.25 },
+  { key:'shape',  label:'Face shape',       short:'face shape', weight:1.15 },
+  { key:'jaw',    label:'Jaw & chin',       short:'jaw',        weight:1.10 },
+  { key:'mouth',  label:'Mouth & lips',     short:'mouth',      weight:1.00 },
+  { key:'cheeks', label:'Cheeks & midface', short:'cheeks',     weight:0.90 },
+  { key:'brows',  label:'Eyebrows',         short:'eyebrows',   weight:0.90 },
+  { key:'colour', label:'Colouring',        short:'colouring',  weight:0.60 }
 ];
 var RX_FEATURE_KEYS = RX_FEATURES.map(function(f){ return f.key; });
-
-/* How big a difference has to be before it is called a difference. Both are in raw 0–100 similarity
-   points and both are deliberately blunt: a 3-point edge on a judgement this soft is noise. */
-var RX_FEATURE_MARGIN = 8;   // per-feature: below this, the feature is shared, not won
-var RX_CLEAR_GAP     = 10;   // overall: a clear resemblance
-var RX_LEAN_GAP      = 4;    // overall: a lean; below it, a genuine mix
-
-function rxLabel(i){ return String.fromCharCode(65 + i); }            // 0 → 'A'
 function rxFeature(key){ return RX_FEATURES.filter(function(f){ return f.key === key; })[0] || null; }
 
-/* ---- 1. planning the passes (blinding + order) ----
-   A permutation per pass: order[slot] = index of the person shown in that slot, so slot 0 is
-   photo "A". The base order is shuffled, then rotated one step per pass. Rotation (rather than a
-   fresh shuffle each time) is what makes the position spread even: over k ≤ n passes nobody
-   occupies the same slot twice, so first-photo bias is shared out instead of landing on one person.
-   `rand` is injectable so tests are deterministic. */
-function rxShuffle(n, rand){
-  var r = rand || Math.random, a = [], i, j, t;
-  for(i = 0; i < n; i++) a.push(i);
-  for(i = n - 1; i > 0; i--){ j = Math.floor(r() * (i + 1)); t = a[i]; a[i] = a[j]; a[j] = t; }
-  return a;
-}
-function rxPlanRounds(n, rounds, rand){
-  var base = rxShuffle(n, rand), plan = [], r, i, order;
-  for(r = 0; r < rounds; r++){
-    order = [];
-    for(i = 0; i < n; i++) order.push(base[(i + r) % n]);
-    plan.push(order);
-  }
-  return plan;
-}
-
-/* ---- 2. one pass of letters → scores per person ----
-   The server answers in letters because that is all it was ever shown. `order` maps them back:
-   the score under letter A belongs to person order[0]. A missing letter becomes null rather than 0 —
-   "not answered" and "answered zero" must not average to the same thing. */
-function rxRoundScores(order, featuresByLetter){
-  var out = {}, n = order.length;
-  RX_FEATURE_KEYS.forEach(function(key){
-    var got = (featuresByLetter || {})[key] || {}, scores = new Array(n), s, v;
-    for(s = 0; s < n; s++){
-      v = got[rxLabel(s)];
-      scores[order[s]] = (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
-    }
-    out[key] = { scores: scores, note: typeof got.note === 'string' ? got.note : '' };
+/* ---- 1. measurements → features ----
+   Weighted mean of the measurements belonging to a feature, skipping any that were unavailable or
+   ruled out by expression. A feature with nothing left is null, not zero: "could not be measured"
+   and "measured, and they are nothing alike" must never come out looking the same. */
+/* What fraction of each feature's weight actually produced a number — 1 when everything in it was
+   measurable, 0 when none of it was. */
+function rxCoverage(mscores){
+  var got = {}, all = {}, out = {};
+  RX_MEASURES.forEach(function(m){
+    all[m.feature] = (all[m.feature] || 0) + m.w;
+    var v = mscores[m.key];
+    if(typeof v === 'number' && isFinite(v)) got[m.feature] = (got[m.feature] || 0) + m.w;
   });
+  RX_FEATURE_KEYS.forEach(function(fk){ out[fk] = all[fk] ? (got[fk] || 0) / all[fk] : 0; });
   return out;
 }
 
-/* ---- 3. many passes → one table ----
-   Mean per (feature, person) over the passes that actually answered, plus the spread (max − min).
-   Spread is the honesty channel: it is how the UI knows the difference between "these two passes
-   agreed on 71" and "one said 45, the other 88, and the mean of 66 means nothing". */
-function rxMerge(rounds, n){
-  var table = {};
-  RX_FEATURE_KEYS.forEach(function(key){
-    var mean = [], spread = [], notes = [], p, vals, i, sum;
-    for(p = 0; p < n; p++){
-      vals = [];
-      for(i = 0; i < rounds.length; i++){
-        var v = rounds[i][key] && rounds[i][key].scores[p];
-        if(typeof v === 'number') vals.push(v);
-      }
-      if(!vals.length){ mean.push(null); spread.push(0); continue; }
-      sum = vals.reduce(function(a, b){ return a + b; }, 0);
-      mean.push(sum / vals.length);
-      spread.push(Math.max.apply(null, vals) - Math.min.apply(null, vals));
-    }
-    rounds.forEach(function(rd){ if(rd[key] && rd[key].note) notes.push(rd[key].note); });
-    table[key] = { mean: mean, spread: spread, notes: notes };
+function rxRollUp(mscores){
+  var out = {};
+  RX_FEATURE_KEYS.forEach(function(fk){ out[fk] = null; });
+  var acc = {};
+  RX_MEASURES.forEach(function(m){
+    var v = mscores[m.key];
+    if(typeof v !== 'number' || !isFinite(v)) return;
+    if(!acc[m.feature]) acc[m.feature] = { s: 0, w: 0 };
+    acc[m.feature].s += v * m.w;
+    acc[m.feature].w += m.w;
   });
-  return table;
+  Object.keys(acc).forEach(function(fk){ if(acc[fk].w > 0) out[fk] = acc[fk].s / acc[fk].w; });
+  return out;
 }
 
-/* ---- 4. the overall score ----
-   Weighted mean across features, skipping any a pass failed to answer so one missing ear does not
-   drag a person down. Returns raw 0–100 similarity per person, plus `share`: the same numbers
-   normalised to sum to 100, which is the "60% Mum / 40% Dad" split people actually want. The two say
-   different things and both are shown — raw is "how alike are they at all", share is "which of you".
+/* One reading: the child's measurements against everyone else's. Keeps both levels — the individual
+   measurements (so the result can say WHICH thing matched) and the feature roll-up. */
+function rxRound(childVals, peopleVals, blocked){
+  var measures = {}, features = {}, coverage = {}, n = peopleVals.length;
+  RX_MEASURES.forEach(function(m){ measures[m.key] = new Array(n); });
+  RX_FEATURE_KEYS.forEach(function(fk){ features[fk] = new Array(n); coverage[fk] = new Array(n); });
+  peopleVals.forEach(function(vals, p){
+    var ms = rxCompare(childVals, vals, blocked && blocked[p]);
+    RX_MEASURES.forEach(function(m){ measures[m.key][p] = ms[m.key]; });
+    var fs = rxRollUp(ms), cv = rxCoverage(ms);
+    RX_FEATURE_KEYS.forEach(function(fk){ features[fk][p] = fs[fk]; coverage[fk][p] = cv[fk]; });
+  });
+  return { measures: measures, features: features, coverage: coverage };
+}
+
+/* ---- 2. several readings → one table ----
+   Mean over the readings that produced a number, and the spread between them. The spread is the
+   honesty channel: it is how the UI knows the difference between two readings agreeing on 71 and one
+   saying 45 while the other said 88. */
+function rxMergeRounds(rounds, n){
+  function fold(pick, keys){
+    var t = {};
+    keys.forEach(function(k){
+      var mean = [], spread = [], p, i, vals, sum;
+      for(p = 0; p < n; p++){
+        vals = [];
+        for(i = 0; i < rounds.length; i++){
+          var v = pick(rounds[i])[k][p];
+          if(typeof v === 'number' && isFinite(v)) vals.push(v);
+        }
+        if(!vals.length){ mean.push(null); spread.push(0); continue; }
+        sum = vals.reduce(function(a, b){ return a + b; }, 0);
+        mean.push(sum / vals.length);
+        spread.push(Math.max.apply(null, vals) - Math.min.apply(null, vals));
+      }
+      t[k] = { mean: mean, spread: spread };
+    });
+    return t;
+  }
+  return {
+    features: fold(function(r){ return r.features; }, RX_FEATURE_KEYS),
+    coverage: fold(function(r){ return r.coverage; }, RX_FEATURE_KEYS),
+    measures: fold(function(r){ return r.measures; }, RX_MEASURES.map(function(m){ return m.key; }))
+  };
+}
+
+/* ---- 3. the overall score ----
+   Two numbers per person, because they answer different questions. `raw` is how alike they are at
+   all; `share` is the same numbers normalised to 100 — the "60% Mum / 40% Dad" split people want.
    Two people can be 80 and 78 alike (a strong family face, no winner) or 30 and 28 (nobody
    especially), and share alone cannot tell those apart. */
 function rxOverall(table, n){
-  var raw = [], p, wsum, vsum, i, f, v;
+  // A feature counts only if EVERY person has a score for it. If a grin made the child's mouth
+  // uncomparable against one parent, that mouth cannot quietly be counted for the other parent
+  // instead — the comparison has to be like for like or it is not a comparison.
+  var usable = {};
+  RX_FEATURE_KEYS.forEach(function(key){
+    var slot = table.features[key], cov = table.coverage && table.coverage[key], p;
+    usable[key] = !!slot;
+    if(!slot) return;
+    for(p = 0; p < n; p++){
+      if(typeof slot.mean[p] !== 'number') usable[key] = false;
+      if(cov && cov.mean[p] !== null && cov.mean[p] < RX_MIN_COVERAGE) usable[key] = false;
+    }
+  });
+
+  var raw = [], p, i, f, v, vsum, wsum;
   for(p = 0; p < n; p++){
-    wsum = 0; vsum = 0;
+    vsum = 0; wsum = 0;
     for(i = 0; i < RX_FEATURES.length; i++){
       f = RX_FEATURES[i];
-      v = table[f.key] ? table[f.key].mean[p] : null;
+      if(!usable[f.key]) continue;
+      v = table.features[f.key].mean[p];
       if(typeof v !== 'number') continue;
       vsum += v * f.weight; wsum += f.weight;
     }
     raw.push(wsum ? vsum / wsum : null);
   }
   var total = raw.reduce(function(a, b){ return a + (typeof b === 'number' ? b : 0); }, 0);
-  var share = raw.map(function(v){
-    if(typeof v !== 'number' || total <= 0) return null;
-    return (v / total) * 100;
-  });
-  return { raw: raw, share: share };
+  return { raw: raw, share: raw.map(function(v){
+    return (typeof v !== 'number' || total <= 0) ? null : (v / total) * 100; }) };
 }
 
-/* ---- 5. calling each feature ----
-   Who won this feature, by how much, and whether that margin is worth saying out loud. A feature is
-   "shared" when the top two are within RX_FEATURE_MARGIN, and "unsteady" when the passes disagreed
-   with each other by more than they disagreed about the people — measured, not asserted. */
+/* ---- 4. calling a feature ---- */
 function rxFeatureCall(table, key, n){
-  var mean = table[key].mean, spread = table[key].spread;
+  var slot = table.features[key];
+  if(!slot) return { key: key, winner: -1, margin: 0, shared: true, unsteady: false, answered: false };
   var ranked = [], p;
-  for(p = 0; p < n; p++) if(typeof mean[p] === 'number') ranked.push({ person: p, score: mean[p] });
-  if(!ranked.length) return { key: key, winner: -1, margin: 0, shared: true, unsteady: false, answered: false };
+  for(p = 0; p < n; p++) if(typeof slot.mean[p] === 'number') ranked.push({ person: p, score: slot.mean[p] });
+  if(!ranked.length) return { key: key, winner: -1, margin: 0, shared: true, unsteady: false, partial: false, answered: false };
   ranked.sort(function(a, b){ return b.score - a.score; });
   var margin = ranked.length > 1 ? ranked[0].score - ranked[1].score : ranked[0].score;
-  var worstSpread = Math.max.apply(null, spread.filter(function(s){ return typeof s === 'number'; }).concat([0]));
+  var worst = Math.max.apply(null, slot.spread.concat([0]));
+  // Scored for some people but not all — whoever remains has not won anything, they are simply the
+  // only one left standing — or scored for everyone but on too little of the feature to mean it.
+  var cov = table.coverage && table.coverage[key];
+  var thin = false, q;
+  if(cov) for(q = 0; q < n; q++) if(cov.mean[q] !== null && cov.mean[q] < RX_MIN_COVERAGE) thin = true;
+  var partial = ranked.length < n || thin;
   return {
     key: key,
     winner: ranked[0].person,
     margin: margin,
     shared: ranked.length > 1 && margin < RX_FEATURE_MARGIN,
-    unsteady: worstSpread > Math.max(RX_FEATURE_MARGIN, margin * 2),
+    // The readings disagreed with each other by more than the people differ: nothing has been shown.
+    unsteady: worst > Math.max(RX_FEATURE_MARGIN, margin * 2),
+    partial: partial,
     answered: true
   };
 }
 function rxAllCalls(table, n){
   return RX_FEATURE_KEYS.map(function(key){ return rxFeatureCall(table, key, n); });
 }
+function rxAttributed(c){ return c.answered && !c.shared && !c.unsteady && !c.partial; }
+function rxWonBy(calls, person){
+  return calls.filter(function(c){ return c.winner === person && rxAttributed(c); })
+              .map(function(c){ return rxFeature(c.key); }).filter(Boolean);
+}
 
-/* ---- 6. the headline ----
-   How steady the answer was across passes matters as much as the gap: a 12-point lead that came from
-   two passes which each named a different leader is not a 12-point lead. `stability` is the fraction
-   of passes whose own leader matches the overall leader. */
+/* Why a feature came out the way it did, in the app's own words rather than a model's: the single
+   measurement in it that matched best, and the one that matched worst. Derived from the numbers on
+   screen, so it can always be checked against them. */
+function rxFeatureNote(table, key, person){
+  var best = null, worst = null;
+  RX_MEASURES.forEach(function(m){
+    if(m.feature !== key) return;
+    var v = table.measures[m.key] && table.measures[m.key].mean[person];
+    if(typeof v !== 'number') return;
+    if(!best || v > best.v) best = { m: m, v: v };
+    if(!worst || v < worst.v) worst = { m: m, v: v };
+  });
+  if(!best) return '';
+  if(!worst || worst.m === best.m || best.v - worst.v < 12) return 'closest on ' + best.m.label;
+  return 'closest on ' + best.m.label + ', furthest on ' + worst.m.label;
+}
+
+/* ---- 5. the headline ----
+   How steady the readings were counts as much as the gap: a 12-point lead assembled from two
+   readings that each named a different leader is not a 12-point lead. */
 function rxStability(rounds, n, leader){
   if(!rounds.length || leader < 0) return 1;
   var agree = 0;
   rounds.forEach(function(rd){
-    var one = rxOverall(rxMerge([rd], n), n).raw, best = -1, bestV = -1, p;
+    var one = rxOverall(rxMergeRounds([rd], n), n).raw, best = -1, bestV = -1, p;
     for(p = 0; p < n; p++) if(typeof one[p] === 'number' && one[p] > bestV){ bestV = one[p]; best = p; }
     if(best === leader) agree++;
   });
@@ -191,8 +240,8 @@ function rxVerdict(overall, calls, rounds, n){
 
   var leader = ranked[0].person;
   var runnerUp = ranked.length > 1 ? ranked[1].person : -1;
-  // With nobody to come second there is no gap to measure. Calling the lone person's own score a
-  // "gap" would read as a landslide over an opponent who was never there.
+  // With nobody to come second there is no gap. Calling the lone person's own score a "gap" would
+  // read as a landslide over an opponent who was never there.
   var gap = ranked.length > 1 ? ranked[0].score - ranked[1].score : 0;
   var stability = rxStability(rounds, n, leader);
 
@@ -201,20 +250,12 @@ function rxVerdict(overall, calls, rounds, n){
   else if(gap >= RX_CLEAR_GAP && stability >= 0.99) confidence = 'clear';
   else if(gap >= RX_LEAN_GAP && stability >= 0.5) confidence = 'lean';
 
-  // Which features each person actually carries — the "your eyes, his nose" line.
-  var mix = calls.filter(function(c){ return c.answered && !c.shared && !c.unsteady; });
-  return { leader: leader, runnerUp: runnerUp, gap: gap, confidence: confidence, stability: stability, mix: mix };
+  return { leader: leader, runnerUp: runnerUp, gap: gap, confidence: confidence, stability: stability,
+           mix: calls.filter(rxAttributed) };
 }
 
-/* Features a given person won outright, in the order they are listed (strongest traits first). */
-function rxWonBy(calls, person){
-  return calls.filter(function(c){ return c.winner === person && c.answered && !c.shared && !c.unsteady; })
-              .map(function(c){ return rxFeature(c.key); })
-              .filter(Boolean);
-}
-
-/* A plain-English headline. Kept here rather than in the UI so the wording is testable: the one
-   thing this app must never do is say "clearly Dad" over a 2-point gap. */
+/* Kept here rather than in the UI so the wording is testable: the one thing this app must never do
+   is say "clearly Dad" over a two-point gap. */
 function rxHeadline(verdict, names){
   var who = names[verdict.leader], other = verdict.runnerUp >= 0 ? names[verdict.runnerUp] : null;
   if(verdict.leader < 0) return 'No comparison could be made.';
@@ -224,12 +265,11 @@ function rxHeadline(verdict, names){
   return other ? 'A genuine mix of ' + who + ' and ' + other : 'A genuine mix';
 }
 
-/* Node's test runner imports this file directly for the pure-logic tests; the browser loads it as a
-   plain script, where `module` does not exist. */
 if(typeof module !== 'undefined' && module.exports){
-  module.exports = { RX_FEATURES: RX_FEATURES, RX_FEATURE_KEYS: RX_FEATURE_KEYS, RX_FEATURE_MARGIN: RX_FEATURE_MARGIN,
-    RX_CLEAR_GAP: RX_CLEAR_GAP, RX_LEAN_GAP: RX_LEAN_GAP, rxLabel: rxLabel, rxFeature: rxFeature, rxShuffle: rxShuffle,
-    rxPlanRounds: rxPlanRounds, rxRoundScores: rxRoundScores, rxMerge: rxMerge, rxOverall: rxOverall,
-    rxFeatureCall: rxFeatureCall, rxAllCalls: rxAllCalls, rxStability: rxStability, rxVerdict: rxVerdict,
-    rxWonBy: rxWonBy, rxHeadline: rxHeadline };
+  module.exports = { RX_FEATURES: RX_FEATURES, RX_FEATURE_KEYS: RX_FEATURE_KEYS,
+    RX_FEATURE_MARGIN: RX_FEATURE_MARGIN, RX_CLEAR_GAP: RX_CLEAR_GAP, RX_LEAN_GAP: RX_LEAN_GAP,
+    RX_MIN_COVERAGE: RX_MIN_COVERAGE, rxFeature: rxFeature, rxAttributed: rxAttributed,
+    rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,
+    rxOverall: rxOverall, rxFeatureCall: rxFeatureCall, rxAllCalls: rxAllCalls, rxWonBy: rxWonBy,
+    rxFeatureNote: rxFeatureNote, rxStability: rxStability, rxVerdict: rxVerdict, rxHeadline: rxHeadline };
 }

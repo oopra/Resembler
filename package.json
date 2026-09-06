@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "lint": "eslint js/ functions/",
+    "lint": "eslint js/",
     "check": "for f in js/*.js; do node --check \"$f\" || exit 1; done"
   },
   "devDependencies": {

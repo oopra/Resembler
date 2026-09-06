@@ -1,15 +1,24 @@
 # Cloudflare Pages headers.
 
 /*
-  # The page loads nothing from anywhere else — no CDN, no web font, no analytics — so it can say so
-  # and have the browser enforce it. `img-src data:` is for the inline SVG favicon and the prepared
-  # face crops, which are canvas data URLs; `blob:` is for decoding the picked file.
-  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  # The page loads nothing from anywhere else — no CDN, no web font, no analytics, no API — so it can
+  # say so and have the browser enforce it. There is no `connect-src` beyond 'self' because there is
+  # nowhere for a photo to go. 'wasm-unsafe-eval' is what lets the face mesh compile; it does not
+  # permit eval of JavaScript.
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  # Nothing here needs a camera, a microphone or a location, and photos of a family are the wrong
-  # thing to leave those doors open around.
+  # Nothing here needs a microphone or a location, and photographs of a family are the wrong thing to
+  # leave those doors open around. The camera is left available to 'self' so a phone can take the
+  # photo directly into the file picker.
   Permissions-Policy: camera=(self), microphone=(), geolocation=(), interest-cohort=()
+
+# The mesh runtime and model are pinned, immutable files — the whole reason for the service worker is
+# not to fetch them twice.
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+/models/*
+  Cache-Control: public, max-age=31536000, immutable
 
 # App code has no cache-busting hash, so revalidate (cheap 304s) rather than serving a stale deploy.
 /js/*
@@ -19,4 +28,6 @@
 /
   Cache-Control: public, max-age=0, must-revalidate
 /index.html
+  Cache-Control: public, max-age=0, must-revalidate
+/sw.js
   Cache-Control: public, max-age=0, must-revalidate

@@ -1,31 +1,40 @@
-/* app.js — the page. Cards, dragging, the compare run, and the way the answer is presented.
-   Loaded last; depends on faces.js (the image pipeline) and resemble.js (the scoring).
+/* app.js — the page. Cards, dragging, the comparison run, and how the answer is presented.
+   Loaded last; uses faces.js (crop and prepare), mesh.js (find the face, read colour),
+   measure.js (the geometry) and resemble.js (the scoring).
 
-   Two things here are deliberate rather than incidental:
+   Three things here are deliberate rather than incidental:
 
-   • The frame is editable, always. Auto-framing is a head start, not an answer — and since a bad
-     crop is the single easiest way to get a confidently wrong result, the crop is the first thing
-     the interface hands you, not something buried behind a settings panel. What you see in the
-     square is exactly the image that gets compared, exposure correction and all.
+   • The frame is editable, always. The mesh proposes it, but a bad crop is the easiest way to get a
+     confidently wrong result, so the crop is the first thing the interface hands you rather than
+     something buried in a settings panel. What you see in the square is exactly what gets measured,
+     exposure correction and all.
    • Uncertainty is shown, not smoothed. A 2-point gap is drawn as a 2-point gap and described as a
-     mix; a feature the passes disagreed about says so. It would be easy — and much more satisfying —
-     to always crown a winner. It would also be a lie most of the time. */
+     mix. A feature that moved between readings says so. A feature nobody could measure says that
+     too. It would be more satisfying to always crown a winner, and it would be a lie most of the
+     time.
+   • Nothing leaves the device, so nothing needs a spinner that says "uploading". The one honest
+     delay is the first load of the mesh, and that is shown as what it is: a progress bar with a size
+     on it. */
 
 var RX_PREVIEW_PX = 260;
 var RX_MAX_PEOPLE = 6;
 var RX_NAME_IDEAS = ['Mum', 'Dad', 'Grandma', 'Grandad', 'Auntie', 'Uncle'];
 var RX_TONES = ['tone-a', 'tone-b', 'tone-c', 'tone-d', 'tone-e', 'tone-f'];
+/* Each reading re-crops slightly differently. Landmark detection is not perfectly repeatable, so
+   what moves between these is measurement noise — which is exactly what we want to see. */
+var RX_JITTER = [1.0, 0.94, 1.07];
 
-var rxChild = null;      // the one child card
-var rxPeople = [];       // the adult cards, in the order they appear on screen
+var rxChild = null;
+var rxPeople = [];
 var rxSeq = 0;
 var rxBusy = false;
+var rxLastRun = null;
 
 /* ============================ cards ============================ */
 
 function rxNewCard(kind, name){
   return { id: 'c' + (++rxSeq), kind: kind, name: name || '', src: null, frame: null,
-           quality: null, faces: 0, el: null, els: {}, raf: 0 };
+           quality: null, faces: 0, pose: null, el: null, els: {}, raf: 0 };
 }
 
 function rxBuildCard(card, index){
@@ -50,7 +59,7 @@ function rxBuildCard(card, index){
       '<div class="tool-row">' +
         '<button type="button" class="tiny rot" data-d="-1" title="Tilt left" aria-label="Tilt left">⟲</button>' +
         '<button type="button" class="tiny rot" data-d="1" title="Tilt right" aria-label="Tilt right">⟳</button>' +
-        '<button type="button" class="tiny auto">Auto-frame</button>' +
+        '<button type="button" class="tiny auto">Find the face</button>' +
         '<button type="button" class="tiny change">Change photo</button>' +
       '</div>' +
     '</div>' +
@@ -99,14 +108,13 @@ function rxBuildCard(card, index){
 function rxDragging(card){
   var pts = new Map(), start = null, pinch = null;
   var f = card.els.frame;
-
   function scale(){ return card.frame ? card.frame.size / f.getBoundingClientRect().width : 1; }
 
   f.addEventListener('pointerdown', function(e){
     if(!card.src) return;
     f.setPointerCapture(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(pts.size === 1){ start = { x: e.clientX, y: e.clientY, cx: card.frame.cx, cy: card.frame.cy }; }
+    if(pts.size === 1) start = { x: e.clientX, y: e.clientY, cx: card.frame.cx, cy: card.frame.cy };
     if(pts.size === 2){
       var a = Array.from(pts.values());
       pinch = { d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y), size: card.frame.size };
@@ -142,12 +150,9 @@ function rxDragging(card){
   }, { passive: false });
 }
 
-// Zoom slider ↔ crop size. 0 on the slider is the widest square the photo allows; 100 is tight on
-// the face. Inverted because "more zoom" means "smaller crop".
 function rxZoomTo(card, v){
   if(!card.src) return;
-  var minDim = Math.min(card.dims.w, card.dims.h);
-  rxSetSize(card, minDim * (1 - 0.82 * (v / 100)));
+  rxSetSize(card, Math.min(card.dims.w, card.dims.h) * (1 - 0.82 * (v / 100)));
 }
 function rxSetSize(card, size){
   if(!card.src) return;
@@ -157,8 +162,7 @@ function rxSetSize(card, size){
   rxPreview(card);
 }
 function rxSyncZoom(card){
-  var minDim = Math.min(card.dims.w, card.dims.h);
-  card.els.zoom.value = String(Math.round(((1 - card.frame.size / minDim) / 0.82) * 100));
+  card.els.zoom.value = String(Math.round(((1 - card.frame.size / Math.min(card.dims.w, card.dims.h)) / 0.82) * 100));
 }
 
 /* ============================ photos ============================ */
@@ -172,6 +176,7 @@ async function rxLoadPhoto(card, file){
     card.els.empty.hidden = true;
     card.els.tools.hidden = false;
     card.els.frame.classList.add('has-photo');
+    rxPreview(card);
     await rxAutoFrameCard(card, true);
   }catch(e){
     card.src = null;
@@ -180,21 +185,40 @@ async function rxLoadPhoto(card, file){
   rxRefreshCompare();
 }
 
+/* Load the mesh if it is not here yet, then let it find the head. The first call is the one that
+   downloads sixteen megabytes, so it reports itself; every call after it is instant. */
+async function rxEnsureMesh(){
+  return rxLoadMesh(function(frac, label){
+    if(frac >= 1){ rxStatus(''); rxProgress(-1); return; }
+    rxStatus(label);
+    rxProgress(frac);
+  });
+}
+
 async function rxAutoFrameCard(card, quiet){
   if(!card.src) return;
-  var got = await rxAutoFrame(card.src);
+  try{
+    await rxEnsureMesh();
+  }catch(e){
+    rxStatus('The face mesh could not be loaded, so faces have to be framed by hand — drag the head into the square. ' +
+             '(Comparing needs the mesh, so it will not work until this loads.)', 'bad');
+    return;
+  }
+  var got = null;
+  try{ got = await rxAutoFrameFromMesh(card.src); }catch(e){ got = null; }
   if(got){
     card.frame = got.frame;
     card.faces = got.faces;
+    card.pose = got.pose;
   }else if(!quiet){
-    rxStatus('This browser has no face detector, so the frame is yours to set — drag the face into the square and zoom until the head fills most of it.', 'note');
+    rxStatus('No face was found in that photo. Drag the head into the square yourself, or try a clearer, straight-on picture.', 'note');
+  }else{
+    card.faces = 0;
   }
   rxSyncZoom(card);
   rxPreview(card);
 }
 
-/* Redraw the square. Throttled to one render per animation frame so a drag stays smooth: the render
-   includes the exposure pass, which is a full read of the preview buffer. */
 function rxPreview(card){
   if(card.raf) return;
   card.raf = requestAnimationFrame(function(){
@@ -210,6 +234,9 @@ function rxPreview(card){
 function rxShowWarnings(card){
   var w = card.quality ? card.quality.warnings.slice() : [];
   if(card.faces > 1) w.unshift('More than one face in this photo — check the square is on the right person.');
+  if(card.src && card.faces === 0) w.unshift('No face found automatically. Frame the head by hand, or use a clearer photo.');
+  var pose = rxPoseWarning(card.pose);
+  if(pose) w.push(pose);
   card.els.warn.hidden = !w.length;
   card.els.warn.textContent = w.join(' ');
 }
@@ -224,19 +251,17 @@ function rxAddPerson(){
   rxRefreshCompare();
 }
 function rxRemovePerson(card){
-  if(rxPeople.length <= 2) return;                 // a comparison needs at least two to choose between
+  if(rxPeople.length <= 2) return;
   rxPeople = rxPeople.filter(function(c){ return c !== card; });
   card.el.remove();
   rxRefreshCompare();
 }
-
 function rxFilled(){ return rxPeople.filter(function(c){ return !!c.src; }); }
-function rxDisplayName(card, i){ return card.name || RX_NAME_IDEAS[i] || ('Person ' + rxLabel(i)); }
+function rxDisplayName(card, i){ return card.name || RX_NAME_IDEAS[i] || ('Person ' + (i + 1)); }
 
 function rxRefreshCompare(){
   var ready = !!(rxChild && rxChild.src) && rxFilled().length >= 1;
-  var btn = document.getElementById('compareBtn');
-  btn.disabled = !ready || rxBusy;
+  document.getElementById('compareBtn').disabled = !ready || rxBusy;
   document.getElementById('addPersonBtn').hidden = rxPeople.length >= RX_MAX_PEOPLE;
   Array.prototype.forEach.call(document.querySelectorAll('#peopleSlots .x'), function(x){
     x.hidden = rxPeople.length <= 2;
@@ -248,10 +273,31 @@ function rxStatus(msg, kind){
   el.textContent = msg || '';
   el.className = 'status' + (kind ? ' ' + kind : '');
 }
+function rxProgress(frac){
+  var bar = document.getElementById('progress');
+  if(frac < 0 || frac >= 1){ bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.firstElementChild.style.width = Math.round(frac * 100) + '%';
+}
 
 /* ============================ the run ============================ */
 
-async function rxCompare(){
+/* Read one face once: crop it (at this reading's jitter), find the mesh in the crop, measure it, and
+   sample its colours off the same pixels that were measured. */
+function rxReadFace(card, jitter){
+  var frame = rxClampFrame({ cx: card.frame.cx, cy: card.frame.cy, size: card.frame.size * jitter,
+                             angle: card.frame.angle }, card.dims.w, card.dims.h);
+  var out = rxRenderFace(card.src, frame, {});
+  var got = rxDetect(out.canvas);
+  if(!got) return { ok: false, prepared: out };
+  var vals = rxMeasure(got.pts, out.canvas.width, out.canvas.height);
+  if(!vals) return { ok: false, prepared: out };
+  var colours = rxSampleColours(out.canvas, got.pts);
+  Object.keys(colours).forEach(function(k){ vals[k] = colours[k]; });
+  return { ok: true, vals: vals, blend: got.blend, pose: got.pose, faces: got.faces, prepared: out };
+}
+
+async function rxRunComparison(){
   if(rxBusy) return;
   var people = rxFilled();
   if(!rxChild || !rxChild.src || !people.length) return;
@@ -261,28 +307,55 @@ async function rxCompare(){
   document.getElementById('results').hidden = true;
 
   try{
-    rxStatus('Preparing the faces…');
-    var childUrl = rxRenderFace(rxChild.src, rxChild.frame, {}).dataUrl;
-    var prepared = people.map(function(c){ return rxRenderFace(c.src, c.frame, {}); });
-    var names = people.map(function(c, i){ return rxDisplayName(c, rxPeople.indexOf(c)); });
+    await rxEnsureMesh();
+    rxStatus('Measuring…');
+    await rxYield();
 
-    var plan = rxPlanRounds(people.length, passes);
-    var rounds = [], issues = [], meta = null;
+    // First reading, at the true crop. It also decides who is in the comparison at all: a photo the
+    // mesh cannot find a face in is reported and set aside, rather than being carried through as a
+    // row of blanks that drag on everyone else's scores.
+    var childRead = rxReadFace(rxChild, RX_JITTER[0]);
+    if(!childRead.ok) throw new Error('No face could be found in the child’s photo. Try a clearer, straight-on picture, or frame the head by hand.');
+    rxChild.pose = childRead.pose; rxChild.faces = childRead.faces;
 
-    for(var p = 0; p < plan.length; p++){
-      rxStatus(passes > 1 ? ('Looking… pass ' + (p + 1) + ' of ' + passes + ' (order shuffled, names hidden)')
-                          : 'Looking…');
-      var order = plan[p];
-      var res = await rxPost({ child: childUrl, others: order.map(function(i){ return prepared[i].dataUrl; }) });
-      rounds.push(rxRoundScores(order, res.features));
-      (res.issues || []).forEach(function(s){ issues.push(rxDeLetter(s, order, names)); });
-      meta = meta || { provider: res.provider, model: res.model, tokens: 0 };
-      meta.tokens += (res.usage && res.usage.total) || 0;
+    var firstReads = people.map(function(c){ return rxReadFace(c, RX_JITTER[0]); });
+    var failed = [], keep = [];
+    firstReads.forEach(function(r, i){
+      if(r.ok) keep.push(i);
+      else failed.push(rxDisplayName(people[i], rxPeople.indexOf(people[i])));
+    });
+    if(!keep.length) throw new Error('No face could be found in any of the other photos. Try clearer, straight-on pictures.');
+
+    people = keep.map(function(i){ return people[i]; });
+    var names = people.map(function(c){ return rxDisplayName(c, rxPeople.indexOf(c)); });
+    var prepared = keep.map(function(i){ return firstReads[i].prepared; });
+    var poses = keep.map(function(i){ return firstReads[i].pose; });
+    var faceCounts = keep.map(function(i){ return firstReads[i].faces; });
+    var childPrepared = childRead.prepared, childBlend = childRead.blend;
+
+    var blocked = keep.map(function(i){ return rxBlocked(childBlend, firstReads[i].blend); });
+    var expressionNotes = rxExpressionNotes(childBlend, keep.map(function(i){ return firstReads[i]; }), names, blocked);
+    var rounds = [rxRound(childRead.vals, keep.map(function(i){ return firstReads[i].vals; }), blocked)];
+
+    // Further readings re-crop slightly, so what moves between them is measurement noise.
+    for(var k = 1; k < passes; k++){
+      rxStatus('Measuring… reading ' + (k + 1) + ' of ' + passes);
+      await rxYield();
+      var jitter = RX_JITTER[k % RX_JITTER.length];
+      var again = rxReadFace(rxChild, jitter);
+      var others = people.map(function(c){ return rxReadFace(c, jitter); });
+      if(!again.ok || others.some(function(r){ return !r.ok; })) continue;   // a wobbly re-crop is not a failure
+      rounds.push(rxRound(again.vals, others.map(function(r){ return r.vals; }),
+                          others.map(function(r){ return rxBlocked(again.blend, r.blend); })));
     }
 
     rxStatus('');
-    rxShowResults({ people: people, names: names, prepared: prepared, childUrl: childUrl,
-                    rounds: rounds, issues: issues, meta: meta, passes: passes });
+    rxShowResults({ people: people, names: names, prepared: prepared, childPrepared: childPrepared,
+                    // The count reported is the number of readings that actually landed, not the
+                    // number asked for: a re-crop the mesh could not read is skipped, and saying
+                    // "3 readings" over 2 would be a small lie in the app's own provenance line.
+                    rounds: rounds, passes: rounds.length, failed: failed, poses: poses, faceCounts: faceCounts,
+                    expressionNotes: expressionNotes });
   }catch(e){
     rxStatus(e.message || 'The comparison could not be completed.', 'bad');
   }finally{
@@ -290,33 +363,52 @@ async function rxCompare(){
   }
 }
 
-async function rxPost(body){
-  var r;
-  try{
-    r = await fetch('/api/compare', { method: 'POST', headers: { 'content-type': 'application/json' },
-                                      body: JSON.stringify(body) });
-  }catch(e){ throw new Error('Could not reach the comparison service — check your connection.'); }
-  var d = {};
-  try{ d = await r.json(); }catch(e){ /* fall through to the status-based message */ }
-  if(!r.ok) throw new Error(d.error || ('The comparison service answered with an error (' + r.status + ').'));
-  if(!d.features) throw new Error('The comparison came back empty.');
-  return d;
-}
+// Let the browser paint the status line before a reading blocks the thread for a moment.
+function rxYield(){ return new Promise(function(r){ setTimeout(r, 0); }); }
 
-// The server talks in letters; the user does not. Turn "B: ears are covered by hair" back into
-// "Dad: ears are covered by hair" using the order that pass was actually sent in.
-function rxDeLetter(text, order, names){
-  return String(text).replace(/\b([A-F])\b/g, function(m, L){
-    var slot = L.charCodeAt(0) - 65;
-    return (slot < order.length && names[order[slot]]) ? names[order[slot]] : m;
+/* Which features were left out for whom, and on account of which expression. Collected from the
+   first reading, since the crops barely differ. */
+var RX_EXPR_WORDS = {
+  jawOpen: 'an open mouth', mouthSmileLeft: 'a smile', mouthSmileRight: 'a smile',
+  mouthPucker: 'pursed lips', mouthFunnel: 'a rounded mouth',
+  eyeBlinkLeft: 'a half-closed eye', eyeBlinkRight: 'a half-closed eye',
+  eyeSquintLeft: 'a squint', eyeSquintRight: 'a squint', eyeWideLeft: 'wide eyes', eyeWideRight: 'wide eyes',
+  browDownLeft: 'a lowered brow', browDownRight: 'a lowered brow',
+  browInnerUp: 'a raised brow', browOuterUpLeft: 'a raised brow', browOuterUpRight: 'a raised brow'
+};
+/* An expression that moves a feature makes that feature unmeasurable, not merely noisier — a grin
+   really does widen a mouth. Whichever photo is pulling the face, the measurement is dropped from
+   BOTH sides of that pair, so the note names the photo at fault rather than blaming the comparison. */
+function rxExpressionNotes(childBlend, reads, names, blocked){
+  var notes = [];
+  blocked.forEach(function(b, i){
+    if(!reads[i].ok) return;
+    var reasons = b.__reasons || [];
+    if(!reasons.length) return;
+    var features = {};
+    RX_MEASURES.forEach(function(m){ if(b[m.key]) features[m.feature] = true; });
+    var list = Object.keys(features).map(function(fk){ return rxFeature(fk).short; });
+    if(!list.length) return;
+    var words = {}, whose = {};
+    reasons.forEach(function(name){
+      words[RX_EXPR_WORDS[name] || 'an expression'] = true;
+      if((childBlend && childBlend[name] || 0) >= RX_EXPR_LEVEL) whose.child = true;
+      if((reads[i].blend && reads[i].blend[name] || 0) >= RX_EXPR_LEVEL) whose.them = true;
+    });
+    var who = whose.child && whose.them ? 'both photos'
+            : whose.child ? 'the child’s photo' : names[i] + '’s photo';
+    notes.push('Some ' + rxList(list) + ' measurements were dropped from the comparison with ' +
+      names[i] + ', because of ' + rxList(Object.keys(words)) + ' in ' + who + '. ' +
+      'A relaxed, neutral face compares best.');
   });
+  return notes;
 }
 
 /* ============================ results ============================ */
 
 function rxShowResults(run){
   var n = run.people.length;
-  var table = rxMerge(run.rounds, n);
+  var table = rxMergeRounds(run.rounds, n);
   var overall = rxOverall(table, n);
   var calls = rxAllCalls(table, n);
   var verdict = rxVerdict(overall, calls, run.rounds, n);
@@ -324,57 +416,51 @@ function rxShowResults(run){
 
   rxRenderVerdict(run, overall, verdict);
   rxRenderLineup(run, overall, verdict);
-  rxRenderMix(run, calls, verdict);
+  rxRenderMix(run, calls);
   rxRenderFeatures(run, table, calls);
-  rxRenderCaveats(run, verdict);
+  rxRenderCaveats(run, table, calls, verdict);
 
-  var m = run.meta || {};
   document.getElementById('provenance').textContent =
-    run.passes + (run.passes === 1 ? ' look' : ' looks, each with the photos in a different order') +
-    (m.provider ? ' · read by ' + m.provider + ' (' + m.model + ')' : '') +
-    (m.tokens ? ' · ' + m.tokens.toLocaleString() + ' tokens' : '');
+    run.passes + (run.passes === 1 ? ' reading' : ' readings, each from a slightly different crop') +
+    ' · measured on this device · nothing was uploaded';
 
   var res = document.getElementById('results');
   res.hidden = false;
   res.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-var rxLastRun = null;
 
 function rxPct(v){ return typeof v === 'number' ? Math.round(v) : '–'; }
 
 function rxRenderVerdict(run, overall, verdict){
   var box = document.getElementById('verdict');
-  var lead = rxHeadline(verdict, run.names);
   var sub;
   if(verdict.confidence === 'only'){
     sub = 'Only one person had a photo, so there is nothing to weigh this against — a likeness of ' +
           rxPct(overall.raw[verdict.leader]) + '/100 means little on its own. Add someone else to compare with.';
   }else if(verdict.confidence === 'clear'){
-    sub = 'A clear lead — ' + Math.round(verdict.gap) + ' points ahead of ' +
-          run.names[verdict.runnerUp] + ', and every pass agreed.';
+    sub = 'A clear lead — ' + Math.round(verdict.gap) + ' points ahead of ' + run.names[verdict.runnerUp] +
+          ', and every reading agreed.';
   }else if(verdict.confidence === 'lean'){
-    sub = 'A lean, not a landslide: ' + Math.round(verdict.gap) + ' points ahead of ' +
-          run.names[verdict.runnerUp] + '.' +
-          (verdict.stability < 1 ? ' The passes did not all agree, so treat it lightly.' : '');
+    sub = 'A lean, not a landslide: ' + Math.round(verdict.gap) + ' points ahead of ' + run.names[verdict.runnerUp] + '.' +
+          (verdict.stability < 1 ? ' The readings did not all agree, so treat it lightly.' : '');
   }else{
     sub = 'The scores are too close to call a winner — ' + Math.round(verdict.gap) +
           ' points between the top two. This little one is genuinely a bit of both.';
   }
   box.className = 'verdict v-' + verdict.confidence;
   box.innerHTML = '<p class="v-lead"></p><p class="v-sub"></p>';
-  box.querySelector('.v-lead').textContent = lead;
+  box.querySelector('.v-lead').textContent = rxHeadline(verdict, run.names);
   box.querySelector('.v-sub').textContent = sub;
 }
 
 function rxRenderLineup(run, overall, verdict){
   var box = document.getElementById('lineup');
   box.innerHTML = '';
-
   var childWrap = document.createElement('div');
   childWrap.className = 'line-child';
-  childWrap.innerHTML = '<img alt="The prepared photo of the child that was compared"><span class="line-name"></span>';
-  childWrap.querySelector('img').src = run.childUrl;
-  childWrap.querySelector('.line-name').textContent = (rxChild.name || 'The little one');
+  childWrap.innerHTML = '<img alt="The prepared crop of the child that was measured"><span class="line-name"></span>';
+  childWrap.querySelector('img').src = run.childPrepared.dataUrl;
+  childWrap.querySelector('.line-name').textContent = rxChild.name || 'The little one';
   box.appendChild(childWrap);
 
   var rows = document.createElement('div');
@@ -383,7 +469,7 @@ function rxRenderLineup(run, overall, verdict){
     var row = document.createElement('div');
     row.className = 'line-row ' + RX_TONES[i % RX_TONES.length] + (i === verdict.leader ? ' leads' : '');
     row.innerHTML =
-      '<img alt="The prepared photo that was compared">' +
+      '<img alt="The prepared crop that was measured">' +
       '<div class="line-body">' +
         '<div class="line-top"><span class="line-name"></span><span class="line-share"></span></div>' +
         '<div class="bar"><span></span></div>' +
@@ -399,16 +485,18 @@ function rxRenderLineup(run, overall, verdict){
   box.appendChild(rows);
 }
 
-function rxRenderMix(run, calls, verdict){
+function rxRenderMix(run, calls){
   var box = document.getElementById('mixLine');
   var parts = [];
   run.names.forEach(function(name, i){
     var won = rxWonBy(calls, i);
-    if(won.length) parts.push('<strong>' + rxEsc(name) + '</strong>’s ' + rxEsc(rxList(won.map(function(f){ return f.short; }))));
+    if(won.length) parts.push('<strong>' + rxEsc(name) + '</strong>’s ' +
+      rxEsc(rxList(won.map(function(f){ return f.short; }))));
   });
   var shared = calls.filter(function(c){ return c.answered && c.shared; })
                     .map(function(c){ return rxFeature(c.key).short; });
-  var html = parts.length ? parts.join(' &nbsp;·&nbsp; ') : 'No single feature stood out strongly enough to hand to one person.';
+  var html = parts.length ? parts.join(' &nbsp;·&nbsp; ')
+                          : 'No single feature stood out strongly enough to hand to one person.';
   if(shared.length) html += '<span class="shared"> &nbsp;·&nbsp; shared between them: ' + rxEsc(rxList(shared)) + '</span>';
   box.innerHTML = html;
 }
@@ -426,8 +514,9 @@ function rxRenderFeatures(run, table, calls){
     head.innerHTML = '<span class="fname"></span><span class="fchip"></span>';
     head.querySelector('.fname').textContent = f.label;
     var chip = head.querySelector('.fchip');
-    if(!call.answered){ chip.textContent = 'not visible'; chip.className = 'fchip chip-none'; }
-    else if(call.unsteady){ chip.textContent = 'the passes disagreed'; chip.className = 'fchip chip-shaky'; }
+    if(!call.answered){ chip.textContent = 'could not be measured'; chip.className = 'fchip chip-none'; }
+    else if(call.unsteady){ chip.textContent = 'the readings disagreed'; chip.className = 'fchip chip-shaky'; }
+    else if(call.partial){ chip.textContent = 'not comparable for everyone'; chip.className = 'fchip chip-none'; }
     else if(call.shared){ chip.textContent = 'too close to call'; chip.className = 'fchip chip-shared'; }
     else { chip.textContent = run.names[call.winner]; chip.className = 'fchip chip-win ' + RX_TONES[call.winner % RX_TONES.length]; }
     row.appendChild(head);
@@ -435,9 +524,9 @@ function rxRenderFeatures(run, table, calls){
     var bars = document.createElement('div');
     bars.className = 'fbars';
     run.names.forEach(function(name, i){
-      var v = table[call.key].mean[i];
+      var v = table.features[call.key].mean[i];
       var b = document.createElement('div');
-      b.className = 'fbar ' + RX_TONES[i % RX_TONES.length] + (call.winner === i && !call.shared && !call.unsteady ? ' win' : '');
+      b.className = 'fbar ' + RX_TONES[i % RX_TONES.length] + (call.winner === i && rxAttributed(call) ? ' win' : '');
       b.innerHTML = '<span class="fbar-name"></span><span class="bar"><span></span></span><span class="fbar-v"></span>';
       b.querySelector('.fbar-name').textContent = name;
       b.querySelector('.bar span').style.width = (typeof v === 'number' ? Math.max(1, v) : 0) + '%';
@@ -446,35 +535,50 @@ function rxRenderFeatures(run, table, calls){
     });
     row.appendChild(bars);
 
-    var note = table[call.key].notes[0];
-    if(note){
-      var p = document.createElement('p');
-      p.className = 'fnote';
-      p.textContent = '“' + note + '”';
-      row.appendChild(p);
+    if(rxAttributed(call) && call.winner >= 0){
+      var note = rxFeatureNote(table, call.key, call.winner);
+      if(note){
+        var p = document.createElement('p');
+        p.className = 'fnote';
+        p.textContent = run.names[call.winner] + ': ' + note + '.';
+        row.appendChild(p);
+      }
     }
     box.appendChild(row);
   });
 }
 
-function rxRenderCaveats(run, verdict){
+function rxRenderCaveats(run, table, calls, verdict){
   var box = document.getElementById('caveats');
   var items = [];
-  if(verdict.stability < 1 && run.passes > 1){
-    items.push('The passes did not all pick the same person overall — ' +
-      Math.round(verdict.stability * 100) + '% agreed. That usually means the two really are close, ' +
-      'or that one of the photos is hard to read.');
-  }
-  run.people.forEach(function(c, i){
-    var q = c.quality;
-    if(q && q.warnings.length) items.push(run.names[i] + ': ' + q.warnings.join(' '));
-  });
-  if(rxChild.quality && rxChild.quality.warnings.length){
-    items.push((rxChild.name || 'The child') + ': ' + rxChild.quality.warnings.join(' '));
-  }
-  run.issues.forEach(function(s){ items.push(s); });
-  items = items.filter(function(t, i){ return items.indexOf(t) === i; });   // passes often repeat themselves
 
+  if(verdict.stability < 1 && run.passes > 1){
+    items.push('The readings did not all pick the same person overall — ' + Math.round(verdict.stability * 100) +
+      '% agreed. That usually means the two really are close, or that one photo is hard to read.');
+  }
+  var wobbly = calls.filter(function(c){ return c.answered && c.unsteady; })
+                    .map(function(c){ return rxFeature(c.key).short; });
+  if(wobbly.length){
+    items.push('Re-cropping the photos slightly moved the ' + rxList(wobbly) +
+      ' measurements more than the people differ on them, so those are not settled by these photographs.');
+  }
+  var missing = calls.filter(function(c){ return !c.answered; }).map(function(c){ return rxFeature(c.key).short; });
+  if(missing.length) items.push('Nothing could be measured for: ' + rxList(missing) + '.');
+
+  run.failed.forEach(function(name){
+    items.push(name + ': no face could be found in that photo, so they were left out of the comparison.');
+  });
+  [rxChild].concat(run.people).forEach(function(c, i){
+    var who = i === 0 ? (rxChild.name || 'The child') : run.names[i - 1];
+    if(c.quality && c.quality.warnings.length) items.push(who + ': ' + c.quality.warnings.join(' '));
+    var pose = rxPoseWarning(i === 0 ? rxChild.pose : run.poses[i - 1]);
+    if(pose) items.push(who + ': ' + pose);
+    var fc = i === 0 ? rxChild.faces : run.faceCounts[i - 1];
+    if(fc > 1) items.push(who + ': more than one face in that photo — the biggest was used.');
+  });
+  run.expressionNotes.forEach(function(t){ items.push(t); });
+
+  items = items.filter(function(t, i){ return items.indexOf(t) === i; });
   if(!items.length){ box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
   box.innerHTML = '<h3 class="sub">Worth knowing</h3><ul></ul>';
@@ -484,7 +588,8 @@ function rxRenderCaveats(run, verdict){
 
 /* ============================ odds and ends ============================ */
 
-function rxEsc(s){ return String(s).replace(/[&<>"]/g, function(c){ return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+function rxEsc(s){ return String(s).replace(/[&<>"]/g, function(c){
+  return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
 function rxList(items){
   if(items.length <= 1) return items[0] || '';
   return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
@@ -495,25 +600,31 @@ function rxResultText(){
   if(!L) return '';
   var lines = [rxHeadline(L.verdict, L.run.names), ''];
   L.run.names.forEach(function(name, i){
-    lines.push(name + ': ' + rxPct(L.overall.share[i]) + '% of the resemblance (likeness ' + rxPct(L.overall.raw[i]) + '/100)');
+    lines.push(name + ': ' + rxPct(L.overall.share[i]) + '% of the resemblance (likeness ' +
+               rxPct(L.overall.raw[i]) + '/100)');
   });
   lines.push('');
   L.calls.forEach(function(c){
-    var f = rxFeature(c.key);
-    var who = !c.answered ? 'not visible' : c.unsteady ? 'unsteady across passes' : c.shared ? 'too close to call' : L.run.names[c.winner];
-    lines.push(f.label + ': ' + who);
+    var who = !c.answered ? 'could not be measured'
+            : c.unsteady ? 'unsteady between readings'
+            : c.partial ? 'not comparable for everyone'
+            : c.shared ? 'too close to call' : L.run.names[c.winner];
+    lines.push(rxFeature(c.key).label + ': ' + who);
   });
   lines.push('');
-  lines.push('For fun only — this compares two photographs, and is not a paternity, DNA or identity test.');
+  lines.push('Measured on-device from face geometry. For fun only — this compares two photographs, ' +
+             'and is not a paternity, DNA or identity test.');
   return lines.join('\n');
 }
 
 function rxCopyResult(){
-  var text = rxResultText();
   var btn = document.getElementById('copyBtn');
-  function done(ok){ btn.textContent = ok ? 'Copied' : 'Press ⌘/Ctrl+C'; setTimeout(function(){ btn.textContent = 'Copy the result as text'; }, 1800); }
+  function done(ok){
+    btn.textContent = ok ? 'Copied' : 'Press ⌘/Ctrl+C';
+    setTimeout(function(){ btn.textContent = 'Copy the result as text'; }, 1800);
+  }
   if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(false); });
+    navigator.clipboard.writeText(rxResultText()).then(function(){ done(true); }, function(){ done(false); });
   }else{ done(false); }
 }
 
@@ -523,13 +634,14 @@ function rxInit(){
   rxAddPerson();
   rxAddPerson();
   document.getElementById('addPersonBtn').addEventListener('click', rxAddPerson);
-  document.getElementById('compareBtn').addEventListener('click', rxCompare);
+  document.getElementById('compareBtn').addEventListener('click', rxRunComparison);
   document.getElementById('againBtn').addEventListener('click', function(){
     document.getElementById('results').hidden = true;
     document.querySelector('.masthead').scrollIntoView({ behavior: 'smooth' });
   });
   document.getElementById('copyBtn').addEventListener('click', rxCopyResult);
   rxRefreshCompare();
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(function(){});
 }
 
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', rxInit);

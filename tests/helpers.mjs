@@ -3,13 +3,17 @@
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// .wasm must arrive as application/wasm or the browser refuses to stream-compile it, which is
+// exactly the sort of thing that works locally and breaks on a real host.
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
-  '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' };
+  '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm', '.task': 'application/octet-stream', '.webmanifest': 'application/manifest+json' };
 
 export async function startServer() {
   const server = createServer(async (req, res) => {
@@ -31,6 +35,10 @@ export async function launchBrowser() {
   const opts = {};
   if (process.env.CHROMIUM_PATH) opts.executablePath = process.env.CHROMIUM_PATH;
   return chromium.launch(opts);
+}
+
+export function fixture(name) {
+  return JSON.parse(readFileSync(new URL(`fixtures/${name}.json`, import.meta.url), 'utf8'));
 }
 
 export async function newPage(browser, url) {

@@ -7,9 +7,10 @@
         'from-image'}) is that ask.
      2. FRAME THE HEAD. A square crop around one head — forehead to chin, ear to ear. The rest of the
         photo is a distraction at best: the comparison should not be swayed by whether one person was
-        photographed in a garden and the other in a kitchen. Auto where the browser has a face
-        detector, hand-adjustable always, because the auto answer is wrong often enough to matter and
-        a wrong frame quietly poisons everything downstream.
+        photographed in a garden and the other in a kitchen. The face mesh proposes the frame (see
+        rxAutoFrameFromMesh in mesh.js) and it is hand-adjustable always, because the automatic
+        answer is wrong often enough to matter and a wrong frame quietly poisons everything
+        downstream.
      3. LEVEL AND NORMALISE. Rotate so the eyes sit level (a tilted head reads as a different face
         shape), then stretch the exposure so both faces land in the same brightness range. Lighting
         is the single biggest false signal in photo comparison: two people under the same lamp look
@@ -82,24 +83,6 @@ function rxEyeAngle(a, b){
   var ang = Math.atan2(dy, dx);
   if(Math.abs(ang) > 0.6) return 0;              // > ~34°: not a level-able pair of eyes
   return ang;
-}
-
-/* Ask the browser for a face, if it has an opinion. FaceDetector ships on some Chromium builds and
-   nowhere else, so this is a bonus path: it returns null far more often than not, and the manual
-   frame is the real interface. */
-async function rxAutoFrame(src){
-  var w = rxDims(src).w, h = rxDims(src).h;
-  if(typeof FaceDetector === 'undefined') return null;
-  try{
-    var faces = await new FaceDetector({ fastMode:false, maxDetectedFaces:5 }).detect(src);
-    if(!faces || !faces.length) return null;
-    faces.sort(function(a, b){ return (b.boundingBox.width * b.boundingBox.height) - (a.boundingBox.width * a.boundingBox.height); });
-    var f = faces[0], frame = rxBoxToFrame(f.boundingBox, w, h);
-    var eyes = (f.landmarks || []).filter(function(l){ return l.type === 'eye'; })
-      .map(function(l){ return (l.locations || [])[0]; }).filter(Boolean);
-    if(eyes.length === 2) frame.angle = rxEyeAngle(eyes[0], eyes[1]);
-    return { frame: frame, faces: faces.length };
-  }catch(e){ return null; }
 }
 
 /* ---- 3. render: crop, level, even out the light ---- */

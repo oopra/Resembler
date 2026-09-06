@@ -45,6 +45,8 @@ main, .masthead, .footnote{ max-width:860px; margin:0 auto; }
 .logo::before{ left:0; }
 .logo::after{ left:8px; border-color:var(--ok); }
 .tagline{ margin:10px 0 0; color:var(--muted); max-width:60ch; }
+.badge{ margin:12px 0 0; display:inline-block; font-size:12px; line-height:1.5; color:var(--ok);
+  border:1px solid currentColor; border-radius:999px; padding:5px 12px; }
 
 /* ---------- steps ---------- */
 .step{
@@ -122,6 +124,12 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 .passes span{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; font-size:14.5px; }
 .passes em{ color:var(--muted); font-style:normal; font-size:12.5px; }
 
+/* The one honest wait in the app: the first download of the mesh. Shown as a bar with a size on it
+   rather than a spinner, because a silent sixteen megabytes reads as a hang. */
+.progress{ margin:12px 0 0; height:6px; border-radius:99px; background:var(--panel-2);
+  border:1px solid var(--line); overflow:hidden; }
+.progress span{ display:block; height:100%; width:0; background:var(--accent); border-radius:99px;
+  transition:width .18s linear; }
 .status{ margin:12px 0 0; font-size:14px; color:var(--muted); min-height:1.2em; }
 .status.bad{ color:var(--bad); }
 .status.note{ color:var(--warn); }

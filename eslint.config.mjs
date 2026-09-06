@@ -1,6 +1,6 @@
-// Flat ESLint config. js/ ships as plain browser scripts loaded in order into one shared
-// global scope (no bundler, no build step), so no-undef / no-unused-vars would be pure noise
-// across those globals. What is kept is the high-signal set that catches real bugs.
+// Flat ESLint config. js/ ships as plain browser scripts loaded in order into one shared global
+// scope (no bundler, no build step), so no-undef / no-unused-vars would be pure noise across those
+// globals. What is kept is the high-signal set that catches real bugs.
 export default [
   {
     files: ['js/**/*.js'],
@@ -25,11 +25,5 @@ export default [
       'no-sparse-arrays': 'warn',
       'no-constant-condition': ['warn', { checkLoops: false }]
     }
-  },
-  {
-    // functions/ are ES modules running on the server (Cloudflare Pages Functions).
-    files: ['functions/**/*.js'],
-    languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
-    rules: { 'no-dupe-keys': 'error', 'no-unreachable': 'error', 'use-isnan': 'error', 'valid-typeof': 'error' }
   }
 ];

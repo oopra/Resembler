@@ -1,17 +1,22 @@
 # Resembler
 
 **Whose eyes? Whose nose? Whose stubborn chin?** Put a photo of a child next to photos of the family
-and get an answer feature by feature — not one hand-wavy "she's the image of her father", but ten
-named traits, each scored against each person, with the ones that are genuinely too close to call
+and get an answer feature by feature — not one hand-wavy "she's the image of her father", but eight
+named features, each scored against each person, with the ones that are genuinely too close to call
 saying so.
 
-A static page plus one small server endpoint. No build step, no framework, no bundler.
+**It runs entirely on your device.** No account, no API key, no server, no upload. A face-mesh model
+is served alongside the page, runs in the browser, and the app works with the network switched off
+after the first visit. These are photographs of somebody's children; the right number of copies to
+make of them is zero.
+
+A static site. No build step, no framework, no bundler.
 
 ---
 
 ## The honest bit, first
 
-This compares **what two faces look like in two photographs**. That is all it is, and the app says so
+This measures **what two faces look like in two photographs**. That is all it is, and the app says so
 on the page as well as here.
 
 - It is **not a paternity test, not a DNA test, and not face recognition.** It cannot tell you who is
@@ -21,73 +26,101 @@ on the page as well as here.
 - Children change enormously as they grow. The toddler who is "all Dad" is frequently a teenager who
   is all Mum.
 
-The design decisions below exist because the easy version of this app — ask once, print a percentage —
-is confidently wrong a lot of the time, and reads as far more authoritative than it has any right to.
+Most of the design decisions below exist because the easy version of this app — measure once, print a
+percentage — reads as far more authoritative than it has any right to.
 
 ---
 
 ## How it works
 
-### 1. On the device: find the head, hold it still, even out the light
+### 1. Prepare the photo — and nothing more
 
 `js/faces.js` is the entire image pipeline, and it does four things:
 
 | Step | Why |
 | --- | --- |
 | **Decode upright** | Phones store rotation in EXIF, not in the pixels. Without `imageOrientation: 'from-image'`, portrait shots arrive sideways. |
-| **Frame the head** | A square crop, forehead to chin. The rest of the photo is a distraction: a comparison should not be swayed by one person being photographed in a garden and the other in a kitchen. Auto-framed where the browser has a face detector, hand-adjustable always — drag, pinch, tilt. |
-| **Level and normalise** | Rotate so the eyes sit level (a tilted head reads as a different face shape), then stretch the exposure so both faces land in the same brightness range. Lighting is the single biggest false signal in photo comparison. The same linear map is applied to R, G and B, so exposure moves and **hue does not** — eye and hair colour are real resemblance and are kept. |
-| **Check it is worth sending** | Too few pixels across the head, or too soft to see an eyelid fold, and the answer would be confident noise. The photo gets a warning before it is ever compared. |
+| **Frame the head** | A square crop, forehead to chin. The rest of the photo is a distraction: a comparison should not be swayed by one person being photographed in a garden and the other in a kitchen. The mesh proposes the frame; you can always drag, pinch and tilt it, because a wrong crop quietly poisons everything downstream. |
+| **Level and normalise** | Rotate so the eyes sit level, then stretch the exposure so both faces land in the same brightness range. Lighting is the biggest false signal in photo comparison. The same linear map goes on R, G and B, so exposure moves and **hue does not** — eye and hair colour are real resemblance and are kept. |
+| **Check it is worth measuring** | Too few pixels across the head, or too soft to see an eyelid fold, and the answer would be confident noise. The photo gets a warning before it is compared. |
 
-What the pipeline deliberately does **not** do: no beautifying, no smoothing, no skin retouching, no
-background removal, no face embeddings, no recognition, no matching against any database. "Find the
-head, hold it still, even out the light" is the whole of it.
+No beautifying, no smoothing, no background removal, no recognition, no matching against any
+database. "Find the head, hold it still, even out the light" is the whole of it.
 
-### 2. Asking, blind, more than once
+### 2. Measure it
 
-`js/resemble.js` handles the part that is easy to get quietly wrong. Three known ways a
-one-shot answer drifts, and what is done about each:
+`js/mesh.js` runs MediaPipe's face landmarker over the crop: 478 points, both irises, a head-pose
+matrix and blendshapes. `js/measure.js` turns those into about thirty-five measurements.
 
-- **Name bias.** Told a photo is "Dad", a reader reaches for what it expects a child to share with a
-  father. So **names never leave the device.** Photos go up as `A`, `B`, `C` and come back as
-  `A`, `B`, `C`; the names are re-attached afterwards, here.
-- **Position bias.** Whoever is shown first scores a little higher. So each pass sends the photos in a
-  different order — a shuffled base **rotated one step per pass**, which guarantees a given person
-  sits in a different slot every time rather than merely hoping a reshuffle moves them. Over *n*
-  passes nobody occupies the same slot twice.
-- **Halo.** One "she's the image of him" impression bleeds across every feature. So each of the ten
-  features is scored on its own, and features that disagree are reported as disagreeing.
+Every measurement is taken after the face is put in a standard pose — rotated so the line between the
+irises is horizontal, scaled so that line is exactly 1 unit, centred between the eyes. So
+`alar_width: 0.62` means *the nose is 0.62 as wide as the gap between the pupils*: a number you can
+compare across two people, two cameras and twenty years.
 
-### 3. Combining, and refusing to overclaim
+Examples of what gets measured: the gap between the eyes, the tilt of the outer corner, the width of
+the nose against its length, the balance of upper lip to lower, philtrum length, cheekbone height,
+jaw width against face width, the gonial angle, the three facial thirds. Colouring is sampled off the
+same pixels that were measured — skin from both cheeks and the forehead, eye colour from the iris
+ring — by *median*, so a highlight on a cheekbone or a catchlight in the eye cannot drag the answer.
+Colours are compared in CIE Lab, where a difference of a few units is roughly what an eye can see.
 
-Scores are averaged across passes, and **the spread between passes is kept**. A feature that swung 30
-points between passes has not been measured, it has been guessed, and it is shown as
-*"the passes disagreed"* rather than being smoothed into a winner.
+Similarity for each measurement is `100 × exp(−|difference| ÷ tolerance)`: identical is 100, one
+tolerance away is 37, two is 14. A smooth curve, so no single measurement flips a verdict by moving a
+hair.
 
-- A feature is only attributed to someone if they lead it by **8 points or more**; otherwise it is
-  *shared*.
-- The headline only says *"Takes after X"* on a **10-point** lead that every pass agreed on. A
-  4-point lead is *"Leans towards X"*. Below that it is *"A genuine mix"* — because it is.
-- Two numbers are reported per person, because they answer different questions. **Likeness** (0–100)
-  is *how alike are they at all*; **share** (summing to 100%) is *which of you*. Two people can be 80
-  and 78 alike (a strong family face, no winner) or 30 and 28 (nobody especially), and the share alone
-  cannot tell those apart.
+> **On the tolerances.** They are a stated convention, not a population statistic — nobody here has a
+> database of family noses. So the 0–100 figure is the ruler that lets people be ranked against each
+> other, and should not be read as "72% of noses". *The comparison between candidates is the real
+> output; the absolute number is the scale it is drawn on.*
 
-The ten features, weighted towards bone structure — which is what survives the age gap between a
-toddler and an adult — and away from colouring, which is the first thing a camera gets wrong:
+### 3. Refuse to overclaim
 
-`eyes` · `nose` · `face shape` · `jaw & chin` · `mouth & lips` · `eyebrows` · `cheeks` · `ears` ·
-`hairline & hair` · `colouring`
+`js/resemble.js` rolls measurements into features and features into a verdict, and most of it is
+about the cases where an answer should not be given:
 
-### 4. The endpoint
+- **A feature needs an 8-point lead** to be attributed to anyone. Otherwise it is *shared*.
+- **The headline needs a 10-point lead and unanimity** to say "Takes after". At 4 points it is
+  "Leans towards". Below that it is "A genuine mix", because it is.
+- **Expressions are excluded, not tolerated.** A grin genuinely widens a mouth, so measurements that
+  an expression moves are dropped when either photo is pulling that face — and the result tells you
+  which ones and why. If that leaves less than half of a feature, the feature is not scored at all: a
+  mouth judged on philtrum length alone is not a mouth.
+- **Like for like.** A feature is only counted in the overall if *everyone* has it. If a grin made the
+  child's mouth uncomparable against one parent, the other parent cannot quietly bank the mouth.
+- **A turned head is flagged, not measured.** Turning a face foreshortens one side of everything,
+  which looks exactly like a genuinely narrower jaw.
+- **Two numbers per person, because they answer different questions.** *Likeness* (0–100) is how alike
+  they are at all; *share* (summing to 100) is which of you. Two people can be 80 and 78 alike (a
+  strong family face, no winner) or 30 and 28 (nobody especially), and share alone cannot tell those
+  apart.
+- **Readings are repeated over jittered crops.** Landmark detection is not pixel-perfect, so the same
+  faces are measured two or three times from slightly different crops and the *spread* is kept. Where
+  that noise is bigger than the difference between people, the feature is reported as unsteady rather
+  than being handed to whoever came out ahead.
 
-`functions/api/compare.js` is a Cloudflare Pages Function that answers exactly one question and
-validates the answer feature by feature before returning it. It is not a chat endpoint and not a
-general image endpoint: prose, missing features and unscored letters are rejected there rather than
-handed to the browser to interpret charitably.
+The eight features — weighted towards bone structure, which is what survives twenty years of growing:
 
-It never learns who anyone is. It is called once per pass, is stateless, and holds the images only
-for the length of the request — nothing about a family is ever assembled server-side.
+`eyes` · `nose` · `face shape` · `jaw & chin` · `mouth & lips` · `cheeks & midface` · `eyebrows` ·
+`colouring`
+
+**Ears and hairline are deliberately absent.** A face mesh stops at the face, so they cannot be
+measured, and guessing at them would be the dishonest half of the answer.
+
+---
+
+## What is vendored, and how big it is
+
+| Path | What | Size |
+| --- | --- | --- |
+| `vendor/mediapipe/vision_bundle.mjs` | MediaPipe Tasks Vision 1.0.1 (Apache-2.0) | 152 KB |
+| `vendor/mediapipe/wasm/` | its WebAssembly runtime, SIMD build only | ~12 MB |
+| `models/face_landmarker.task` | the face landmarker model, float16 (Apache-2.0) | 3.6 MB |
+
+That is a real download, once. The app is honest about it: the first comparison shows a progress bar
+with the size on it rather than a spinner, and the service worker caches those two files
+`cache-first` and never revalidates them, so it never happens twice.
+
+Only the SIMD WebAssembly build is shipped, which needs Chrome 91+, Firefox 89+ or Safari 16.4+.
 
 ---
 
@@ -96,33 +129,19 @@ for the length of the request — nothing about a family is ever assembled serve
 ```bash
 npm install
 npx playwright install chromium     # for the browser tests
-npm test                            # scoring, image pipeline, API validation, and the full UI flow
+npm test                            # geometry, scoring, and the whole flow in a real browser
 npm run lint
+npx serve .                         # any static file server will do
 ```
 
-The page itself is static — any file server will do:
-
-```bash
-npx serve .        # then open http://localhost:3000
-```
-
-…but `/api/compare` needs a server, so use `npx wrangler pages dev .` for the whole thing locally.
+There is nothing else to configure. There are no environment variables, because there is nothing to
+authenticate to.
 
 ## Deploying
 
-Built for **Cloudflare Pages**: point it at the repo, no build command, output directory `/`. The
-`functions/` directory is picked up automatically.
-
-Set one API key as an environment variable — whichever you have:
-
-| Variable | Reader used |
-| --- | --- |
-| `ANTHROPIC_API_KEY` | Claude (default `claude-opus-5`) |
-| `MISTRAL_API_KEY` | Pixtral (default `pixtral-large-latest`) |
-| `COMPARE_MODEL` | *optional* — override the model for either |
-
-With no key set, the app loads and frames photos as normal and says plainly that comparing is not
-configured, rather than failing mysteriously.
+Any static host. Built for **Cloudflare Pages**: point it at the repo, no build command, output
+directory `/`. `_headers` sets a Content-Security-Policy with no `connect-src` beyond `self` — there
+is nowhere for a photo to go, and the browser enforces it.
 
 ## Layout
 
@@ -130,23 +149,36 @@ configured, rather than failing mysteriously.
 index.html                 the page
 css/styles.css             one stylesheet, no framework, no web fonts
 js/faces.js                decode · frame · level · normalise · quality-check
-js/resemble.js             blinding · pass planning · scoring · the verdict   (pure, no DOM)
-js/app.js                  cards, dragging, the compare run, the results
-functions/api/compare.js   one blind comparison pass, validated
-tests/logic.test.mjs       the scoring and the image maths, in plain Node
-tests/api.test.mjs         what the endpoint refuses to pass on
-tests/ui.test.mjs          the whole flow in a real browser, API stubbed
+js/measure.js              478 landmarks → ~35 measurements → a score per feature   (pure)
+js/mesh.js                 loads and runs the face mesh; samples skin and eye colour
+js/resemble.js             measurements → features → a verdict                      (pure)
+js/app.js                  cards, dragging, the run, the results
+sw.js                      caches the mesh so 16 MB is downloaded once
+tests/fixtures/*.json      478 landmarks from two public-domain photographs — numbers only
 ```
 
-`js/*.js` are plain browser scripts sharing one global scope, loaded in order — no modules, no
-bundler. They expose their functions through a `module.exports` guard purely so the tests exercise the
-real shipped code rather than a copy of it.
+`js/*.js` are plain browser scripts sharing one global scope, loaded in order. They expose their
+functions through a `module.exports` guard purely so the tests exercise the real shipped code rather
+than a copy of it.
 
-Two tests are worth knowing about, because they are the ones that would catch this app quietly
-becoming dishonest:
+## The tests worth knowing about
 
-- *"a reader that always flatters the first photo produces a dead heat, not a false winner"* — stubs
-  an API that unconditionally scores slot A at 88 and slot B at 32, and asserts the result comes out
-  exactly 60–60. That is the order rotation doing its job.
-- *"names never leave the device"* — inspects every outgoing request body and fails if a name appears
-  in it.
+Ground truth is constructed rather than assumed: a child's measurements are interpolated between two
+real faces, so the right answer is known in advance.
+
+- *"a child identical to one parent is called for that parent"* — scores 100, says "Takes after".
+- *"a child exactly half way between two parents is called a mix"* — 50/50, and no winner is named.
+- *"a feature whose measurements were mostly knocked out is not won on the remainder"*.
+- *"a feature only one person could be measured on is not silently won by them"*.
+- *"no network request is made while comparing"* — fails if anything at all is fetched off-origin.
+- *"the vendored face mesh actually loads and starts from these files alone"* — no stub; loads the
+  real 16 MB and creates a landmarker, which is the only way to catch a vendored asset going missing
+  or being served with the wrong MIME type.
+- *"no two shipped scripts define the same global"* — with no bundler, a name defined twice is not an
+  error anywhere; the last file loaded just silently wins. This is in the suite because it happened:
+  `app.js`'s `rxCompare` button handler ate `measure.js`'s `rxCompare(child, adult)`, and every
+  comparison quietly returned nothing.
+
+The landmark fixtures were checked against the photographs they came from before being trusted —
+outer eye corner outside the inner one, brow above the lid, subnasale below the nose tip, chin the
+lowest point — because a wrong landmark index produces a plausible-looking number, not an error.

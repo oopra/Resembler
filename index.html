@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Resembler — who does she take after?</title>
-<meta name="description" content="Compare family photos feature by feature and see whose eyes, whose nose and whose chin the little one has.">
+<meta name="description" content="Compare family photos feature by feature and see whose eyes, whose nose and whose chin the little one has. Runs entirely on your device.">
 <meta name="theme-color" content="#d98b6a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Resembler">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='13' fill='%231e1a17'/><circle cx='24' cy='27' r='11' fill='none' stroke='%23d98b6a' stroke-width='3.4'/><circle cx='40' cy='37' r='11' fill='none' stroke='%237fa08c' stroke-width='3.4'/></svg>">
 <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -16,6 +18,7 @@
 <header class="masthead">
   <h1><span class="logo" aria-hidden="true"></span> Resembler</h1>
   <p class="tagline">Whose eyes? Whose nose? Whose stubborn chin? Put the photos side by side and find out — feature by feature.</p>
+  <p class="badge">Runs entirely on your device. No account, no upload, no key. Works offline once loaded.</p>
 </header>
 
 <main>
@@ -23,14 +26,14 @@
   <!-- ---------- 1. the child ---------- -->
   <section class="step" aria-labelledby="h-child">
     <h2 id="h-child"><span class="step-n">1</span> The little one</h2>
-    <p class="hint">One clear, front-on photo. Looking straight at the camera, face not too small in the frame — that is the whole trick to a good answer.</p>
+    <p class="hint">One clear, straight-on photo, looking at the camera with a relaxed face. Big in the frame beats far away; a neutral expression beats a big grin, because a grin genuinely moves the mouth.</p>
     <div class="slots" id="childSlots"></div>
   </section>
 
   <!-- ---------- 2. the family ---------- -->
   <section class="step" aria-labelledby="h-people">
     <h2 id="h-people"><span class="step-n">2</span> Who to compare against</h2>
-    <p class="hint">Mum, Dad, a grandparent, an uncle — up to six. Their <strong>names never leave this device</strong>: the photos are sent as unlabelled A, B, C, precisely so nobody gets credit for being called “Dad”.</p>
+    <p class="hint">Mum, Dad, a grandparent, an uncle — up to six.</p>
     <div class="slots" id="peopleSlots"></div>
     <button type="button" id="addPersonBtn" class="ghost">+ Add another person</button>
   </section>
@@ -40,12 +43,13 @@
     <h2 id="h-compare"><span class="step-n">3</span> Compare</h2>
     <fieldset class="passes">
       <legend>How carefully?</legend>
-      <label><input type="radio" name="passes" value="1"> <span><strong>Quick</strong><em>one look</em></span></label>
-      <label><input type="radio" name="passes" value="2" checked> <span><strong>Balanced</strong><em>two looks, order swapped</em></span></label>
-      <label><input type="radio" name="passes" value="3"> <span><strong>Careful</strong><em>three looks, order rotated</em></span></label>
+      <label><input type="radio" name="passes" value="1"> <span><strong>Quick</strong><em>one reading</em></span></label>
+      <label><input type="radio" name="passes" value="2" checked> <span><strong>Balanced</strong><em>two readings</em></span></label>
+      <label><input type="radio" name="passes" value="3"> <span><strong>Careful</strong><em>three readings</em></span></label>
     </fieldset>
-    <p class="hint">Each look shuffles the running order and hides the names. Where the looks disagree, the result says so instead of picking a winner.</p>
+    <p class="hint">Each reading measures the same faces from a slightly different crop. Finding a face is never pixel-perfect, so anything that shifts between readings is measurement noise — and where that noise is bigger than the difference between people, the result says so instead of picking a winner.</p>
     <button type="button" id="compareBtn" class="primary" disabled>Compare faces</button>
+    <div class="progress" id="progress" hidden><span></span></div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
   </section>
 
@@ -68,12 +72,16 @@
 </main>
 
 <footer class="footnote">
-  <p><strong>For fun, and only for fun.</strong> This compares what two faces look like in two photographs. It is not a paternity test, not a DNA test and not face recognition — it cannot tell you who is related to whom, and a different pair of photos of the same two people can give a different answer. Children also change enormously as they grow; the toddler who is “all Dad” is frequently a teenager who is all Mum.</p>
-  <p>Photos are cropped and prepared on your device, sent for a single comparison, and not stored — not by this app, not in your browser. Names and relationships are never sent at all.</p>
+  <p><strong>For fun, and only for fun.</strong> This measures what two faces look like in two photographs. It is not a paternity test, not a DNA test and not face recognition — it cannot tell you who is related to whom, and a different pair of photos of the same two people can give a different answer. Children also change enormously as they grow; the toddler who is “all Dad” is frequently a teenager who is all Mum.</p>
+  <p><strong>How it works.</strong> A face-mesh model runs in this page and marks 478 points on each face. Those become about thirty measurements — the gap between the eyes, the width of the nose against its length, the angle of the jaw, the balance of the lips — each taken relative to the distance between the pupils, so distance from the camera and the difference between a child’s head and an adult’s largely cancel out. Similar measurements score high; the scores are grouped into features and weighted towards bone structure, which is what survives twenty years of growing.</p>
+  <p><strong>What it will not measure.</strong> Ears and hairline: a face mesh stops at the face, so those are left out rather than guessed at. Anything an expression moves — a smile widening the mouth, a raised brow — is dropped from the comparison when either photo is pulling that face, and the result tells you it was dropped. A face turned or tipped away from the camera is flagged rather than measured, because turning a head foreshortens one side of everything.</p>
+  <p><strong>Where your photos go: nowhere.</strong> Everything happens in this page. Nothing is uploaded, nothing is stored, and there is no server to store it on — the model and its runtime are files served alongside this page, about 16 MB the first time, cached afterwards so it works with the network off.</p>
 </footer>
 
-<script src="js/faces.js"></script>     <!-- decode, frame, level, normalise, quality-check -->
-<script src="js/resemble.js"></script>  <!-- blinding, passes, scoring, the verdict -->
-<script src="js/app.js"></script>       <!-- the page: cards, dragging, the compare run -->
+<script src="js/faces.js"></script>     <!-- decode · frame · level · normalise · quality-check -->
+<script src="js/measure.js"></script>   <!-- landmarks → ~30 measurements → a score per feature -->
+<script src="js/mesh.js"></script>      <!-- loads and runs the face mesh; reads skin and eye colour -->
+<script src="js/resemble.js"></script>  <!-- rolls measurements into features, and into a verdict -->
+<script src="js/app.js"></script>       <!-- the page: cards, dragging, the run, the results -->
 </body>
 </html>

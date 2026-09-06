@@ -1,0 +1,15 @@
+{
+  "name": "Resembler — who does she take after?",
+  "short_name": "Resembler",
+  "description": "Compare family photos feature by feature, entirely on your own device.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14110f",
+  "theme_color": "#d98b6a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
