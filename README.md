@@ -167,11 +167,15 @@ authenticate to.
 
 Any static host — there is no build step, so the repo *is* the site.
 
-**GitHub Pages.** Settings → Pages → Deploy from a branch → `main`, folder `/ (root)`. The
-`.nojekyll` file at the root matters: without it Pages pipes everything through Jekyll on the way
+**GitHub Pages.** Settings → Pages → Deploy from a branch → `main`, folder `/ (root)`. That switch
+has to be thrown by a person once: enabling Pages needs repository-admin rights, which no Actions
+workflow token has — `actions/configure-pages` with `enablement: true` fails with *Resource not
+accessible by integration*. So there is deliberately no Pages workflow here; the branch setting plus
+the `.nojekyll` file is the whole of it.
+
+The `.nojekyll` file is not optional. Without it Pages pipes everything through Jekyll on the way
 out, which has its own ideas about directories called `vendor/` — and `vendor/` is where the entire
-face-mesh runtime lives. (`.github/workflows/pages.yml` is there for the "GitHub Actions" source
-option instead; either route works.)
+face-mesh runtime lives.
 
 **Cloudflare Pages.** Point it at the repo, no build command, output directory `/`. This is the only
 host where `_headers` takes effect, giving a Content-Security-Policy with no `connect-src` beyond
