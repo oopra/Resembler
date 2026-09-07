@@ -416,3 +416,60 @@ test('rxCoverage: everything measurable is 1, nothing measurable is 0', () => {
   assert.equal(R.rxCoverage(all).nose, 1);
   assert.equal(R.rxCoverage(none).nose, 0);
 });
+
+/* ---------- can we see the eyes at all ---------- */
+
+// A synthetic eye region: a bright sclera with a dark iris on it, or a flat dark lens over both.
+// Built as a real canvas-shaped buffer so rxEyeVisibility is exercised exactly as it runs.
+function eyeCanvas({ lens }) {
+  const W = 200, H = 200, data = new Uint8ClampedArray(W * H * 4);
+  const put = (x, y, v) => { const i = ((y | 0) * W + (x | 0)) * 4; data[i] = data[i + 1] = data[i + 2] = v; data[i + 3] = 255; };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) put(x, y, 150);         // skin/cheek
+  const eyes = [[70, 100], [130, 100]];
+  for (const [cx, cy] of eyes) {
+    for (let y = cy - 14; y <= cy + 14; y++) for (let x = cx - 22; x <= cx + 22; x++) {
+      if ((x - cx) ** 2 / 484 + (y - cy) ** 2 / 196 > 1) continue;
+      const iris = (x - cx) ** 2 + (y - cy) ** 2 < 90;
+      put(x, y, lens ? 20 : (iris ? 45 : 215));                                   // lens: all dark
+    }
+  }
+  return {
+    width: W, height: H,
+    getContext: () => ({ getImageData: () => ({ data }) })
+  };
+}
+// Landmarks the metric needs, positioned to match the drawing above (normalised).
+const eyePts = (() => {
+  const p = Array.from({ length: 478 }, () => [0.5, 0.5, 0]);
+  p[M.RX_P.irisL] = [70 / 200, 100 / 200, 0];  p[M.RX_P.irisR] = [130 / 200, 100 / 200, 0];
+  p[M.RX_P.eyeLouter] = [48 / 200, 100 / 200, 0]; p[M.RX_P.eyeLinner] = [92 / 200, 100 / 200, 0];
+  p[M.RX_P.eyeRouter] = [152 / 200, 100 / 200, 0]; p[M.RX_P.eyeRinner] = [108 / 200, 100 / 200, 0];
+  p[M.RX_P.cheekL] = [40 / 200, 150 / 200, 0]; p[M.RX_P.cheekR] = [160 / 200, 150 / 200, 0];
+  p[M.RX_P.alarL] = [88 / 200, 150 / 200, 0];  p[M.RX_P.alarR] = [112 / 200, 150 / 200, 0];
+  return p;
+})();
+
+test('rxEyeVisibility: an open eye has a bright sclera beside a dark iris', () => {
+  const G = require('../js/mesh.js');
+  const v = G.rxEyeVisibility(eyeCanvas({ lens: false }), eyePts);
+  assert.ok(v.contrast > G.RX_EYE_CONTRAST_MIN * 2, `contrast ${v.contrast} should be clearly above the floor`);
+  assert.ok(v.eyeVsCheek > G.RX_EYE_VS_CHEEK_MIN * 2);
+  assert.equal(v.covered, false);
+});
+
+test('rxEyeVisibility: a dark lens flattens both signals and is called covered', () => {
+  // This is the case that produced a confident wrong answer: MediaPipe still detects a face and
+  // still places irises — on the lenses, 0.13–0.16 of an eye-gap out — so every measurement that
+  // is scaled and levelled by that line is wrong, not just the eyes.
+  const G = require('../js/mesh.js');
+  const v = G.rxEyeVisibility(eyeCanvas({ lens: true }), eyePts);
+  assert.ok(v.contrast < G.RX_EYE_CONTRAST_MIN, `contrast ${v.contrast} should collapse`);
+  assert.ok(v.eyeVsCheek < G.RX_EYE_VS_CHEEK_MIN);
+  assert.equal(v.covered, true);
+});
+
+test('rxEyeVisibility: a degenerate reading is not reported as sunglasses', () => {
+  const G = require('../js/mesh.js');
+  const flat = Array.from({ length: 478 }, () => [0.5, 0.5, 0]);   // every point on top of the others
+  assert.equal(G.rxEyeVisibility(eyeCanvas({ lens: false }), flat).covered, false);
+});

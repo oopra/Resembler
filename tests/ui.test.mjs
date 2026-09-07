@@ -24,12 +24,13 @@ async function stubMesh(p, queue) {
     window.rxLoadMesh = function (cb) { if (cb) cb(1, ''); return Promise.resolve({}); };
     window.rxDetect = function () {
       const f = q[window.__seen++ % q.length];
-      return { pts: f.pts, blend: f.blend || {}, pose: f.pose || { yaw: 0, pitch: 0, roll: 0 }, faces: f.faces || 1 };
+      return { pts: f.pts, blend: f.blend || {}, pose: f.pose || { yaw: 0, pitch: 0, roll: 0 },
+               faces: f.faces || 1, eyes: f.eyes || { contrast: 0.5, eyeVsCheek: 0.9, covered: false } };
     };
     window.rxAutoFrameFromMesh = async function (src) {
       const d = rxDims(src);
       return { frame: rxClampFrame({ cx: d.w / 2, cy: d.h * 0.42, size: Math.min(d.w, d.h) * 0.7, angle: 0 }, d.w, d.h),
-               faces: 1, pose: { yaw: 0, pitch: 0, roll: 0 } };
+               faces: 1, pose: { yaw: 0, pitch: 0, roll: 0 }, eyes: { contrast: 0.5, eyeVsCheek: 0.9, covered: false } };
     };
   }, queue);
 }
@@ -386,4 +387,56 @@ test('installed, it runs with the network off — page, mesh and all', async () 
   } finally {
     await page.context().setOffline(false);
   }
+});
+
+/* ---------- sunglasses ---------- */
+
+test('a person in sunglasses is left out, not scored on a guessed eye line', async () => {
+  // The mesh detects a face behind dark lenses perfectly happily and puts the irises ON the lenses,
+  // measured at 0.13–0.16 of an eye-gap out of place. Since that line is what every other
+  // measurement is scaled and levelled by, this cannot be reported as "eyes: 28" with the nose and
+  // jaw carrying on regardless — the whole reading is void.
+  const shaded = { ...B, eyes: { contrast: 0.0, eyeVsCheek: 0.12, covered: true } };
+  await stubMesh(page, [A, A, shaded]);
+  await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+
+  const r = await page.evaluate(() => ({
+    rows: document.querySelectorAll('.line-row').length,
+    names: rxLastRun.run.names,
+    caveats: document.getElementById('caveats').textContent,
+    features: [...document.querySelectorAll('.frow')].map((x) => x.querySelector('.fname').textContent)
+  }));
+  assert.equal(r.rows, 1, 'only the measurable person appears');
+  assert.deepEqual(r.names, ['Mum'], 'Dad is not given a score at all');
+  assert.match(r.caveats, /Dad: the eyes are hidden/);
+  assert.match(r.caveats, /nose, jaw and face shape would be wrong too/);
+  assert.ok(r.features.includes('Eyes'), 'the surviving comparison still reports normally');
+});
+
+test('a child in sunglasses stops the whole comparison, since there is no ruler', async () => {
+  const shaded = { ...A, eyes: { contrast: 0.02, eyeVsCheek: 0.2, covered: true } };
+  await stubMesh(page, [shaded, A, B]);
+  await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 1);
+  await page.click('#compareBtn');
+  await page.waitForFunction(() => document.getElementById('status').classList.contains('bad'));
+  assert.match(await page.textContent('#status'), /The child’s eyes are hidden/);
+  assert.equal(await page.isHidden('#results'), true);
+});
+
+test('covered eyes are flagged on the card as soon as the photo is added', async () => {
+  await stubMesh(page, [A]);
+  await page.evaluate(() => {
+    const real = window.rxAutoFrameFromMesh;
+    window.rxAutoFrameFromMesh = async (src) => {
+      const got = await real(src);
+      return { ...got, eyes: { contrast: 0.01, eyeVsCheek: 0.15, covered: true } };
+    };
+  });
+  await addPhoto(page, '#childSlots .file', 1);
+  const warn = await page.textContent('#childSlots .warn');
+  assert.match(warn, /Both eyes need to be visible/);
+  assert.equal(await page.isHidden('#childSlots .warn'), false, 'and it is actually on screen');
 });

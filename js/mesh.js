@@ -14,6 +14,17 @@
    refused instead of mismeasured), and blendshapes (so a broad grin is known to have moved the
    mouth). */
 
+/* measure.js supplies RX_P and rxPose; faces.js supplies rxDims and rxClampFrame. In the browser all
+   four are simply there — one global scope, loaded in order — but under Node's test runner they have
+   to be pulled in. Assigned onto globalThis rather than declared with `var`, so the browser's real
+   globals are never shadowed by a hoisted local that is never assigned. */
+if(typeof require === 'function'){
+  if(typeof RX_P === 'undefined') globalThis.RX_P = require('./measure.js').RX_P;
+  if(typeof rxPose === 'undefined') globalThis.rxPose = require('./measure.js').rxPose;
+  if(typeof rxDims === 'undefined') globalThis.rxDims = require('./faces.js').rxDims;
+  if(typeof rxClampFrame === 'undefined') globalThis.rxClampFrame = require('./faces.js').rxClampFrame;
+}
+
 var RX_MESH_WASM  = './vendor/mediapipe/wasm';
 var RX_MESH_MODEL = './models/face_landmarker.task';
 /* Careful: fetch() resolves against the DOCUMENT's URL while a dynamic import() in a classic script
@@ -90,11 +101,13 @@ function rxDetect(source){
   var blend = {};
   ((res.faceBlendshapes || [])[best] || {}).categories?.forEach(function(c){ blend[c.categoryName] = c.score; });
   var mtx = (res.facialTransformationMatrixes || [])[best];
+  var pts = faces[best].map(function(p){ return [p.x, p.y, p.z]; });
   return {
-    pts: faces[best].map(function(p){ return [p.x, p.y, p.z]; }),
+    pts: pts,
     blend: blend,
     pose: rxPose(mtx && mtx.data),
-    faces: faces.length
+    faces: faces.length,
+    eyes: rxEyeVisibility(source, pts)
   };
 }
 function rxSpread(pts){
@@ -132,7 +145,7 @@ async function rxAutoFrameFromMesh(source){
   var angle = Math.atan2((b[1] - a[1]) * h, (b[0] - a[0]) * w);
   if(Math.abs(angle) > 0.6) angle = 0;
   return { frame: rxClampFrame({ cx: cx, cy: cy, size: size, angle: angle }, w, h),
-           faces: got.faces, pose: got.pose };
+           faces: got.faces, pose: got.pose, eyes: got.eyes };
 }
 
 /* ---- colour, read off the picture rather than guessed ----
@@ -212,6 +225,65 @@ function rxSampleColours(canvas, pts){
   return out;
 }
 
+/* ---- can we actually see the eyes? ----
+   This matters more than it sounds. The two iris centres are the ruler: every measurement in this
+   app is scaled by the distance between them, rotated to level them, and centred on them. Put dark
+   sunglasses on a face and the mesh does NOT fail — it detects happily and places the irises on the
+   lenses, measured here as 0.13–0.16 of an eye-gap out of position. A ruler that wrong does not
+   merely spoil the eyes row; it quietly bends the nose, the jaw and the face shape too.
+
+   Two signals, either of which is enough. Bare eyes have a bright sclera beside a dark iris; a lens
+   has no such edge. And an eye region far darker than the cheek beside it is a lens, not an eye.
+   Measured on real photographs: contrast 0.37 and 0.85 with eyes visible, 0.00 behind lenses;
+   eye-vs-cheek 1.06 and 0.78 visible, 0.19 and 0.10 behind lenses. The thresholds sit in the gap,
+   nearer the lens end, because wrongly rejecting a good photo is a nuisance and wrongly accepting a
+   covered one is a wrong answer presented confidently. */
+var RX_EYE_CONTRAST_MIN = 0.10;   // sclera-vs-iris edge; bare eyes measured 0.37+
+var RX_EYE_VS_CHEEK_MIN = 0.35;   // eye region against the cheek; bare eyes measured 0.78+
+
+function rxEyeVisibility(canvas, pts){
+  var W = canvas.width, H = canvas.height;
+  var data = canvas.getContext('2d').getImageData(0, 0, W, H).data;
+  var at = function(i){ return [pts[i][0] * W, pts[i][1] * H]; };
+  var eyeL = at(RX_P.irisL), eyeR = at(RX_P.irisR);
+  var iod = Math.hypot(eyeR[0] - eyeL[0], eyeR[1] - eyeL[1]);
+  if(!(iod > 4)) return { contrast: 1, eyeVsCheek: 1, covered: false };
+
+  var r = Math.max(2, iod * 0.06);
+  var lum = function(p, rad){
+    var v = [], x, y, i;
+    for(y = Math.round(p[1] - rad); y <= p[1] + rad; y++){
+      for(x = Math.round(p[0] - rad); x <= p[0] + rad; x++){
+        if(x < 0 || y < 0 || x >= W || y >= H) continue;
+        if((x - p[0]) * (x - p[0]) + (y - p[1]) * (y - p[1]) > rad * rad) continue;
+        i = (y * W + x) * 4;
+        v.push(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+      }
+    }
+    return v.length ? rxMedian(v) : null;
+  };
+  var mid = function(a, b, t){ return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; };
+
+  // Sclera is sampled towards BOTH corners and the brighter taken: one side is often in shadow or
+  // behind a lash, and a single dark sample there would read as a lens.
+  var irisL = lum(eyeL, r), irisR = lum(eyeR, r);
+  var sclL = Math.max(lum(mid(eyeL, at(RX_P.eyeLouter), 0.72), r * 0.8) || 0,
+                      lum(mid(eyeL, at(RX_P.eyeLinner), 0.72), r * 0.8) || 0);
+  var sclR = Math.max(lum(mid(eyeR, at(RX_P.eyeRouter), 0.72), r * 0.8) || 0,
+                      lum(mid(eyeR, at(RX_P.eyeRinner), 0.72), r * 0.8) || 0);
+  var cheek = ((lum(mid(at(RX_P.cheekL), at(RX_P.alarL), 0.45), r) || 0) +
+               (lum(mid(at(RX_P.cheekR), at(RX_P.alarR), 0.45), r) || 0)) / 2;
+  if(irisL === null || irisR === null) return { contrast: 1, eyeVsCheek: 1, covered: false };
+
+  var contrast = ((sclL - irisL) / (sclL + irisL + 1) + (sclR - irisR) / (sclR + irisR + 1)) / 2;
+  var eyeVsCheek = cheek > 1 ? ((sclL + sclR) / 2) / cheek : 1;
+  return {
+    contrast: contrast,
+    eyeVsCheek: eyeVsCheek,
+    covered: contrast < RX_EYE_CONTRAST_MIN || eyeVsCheek < RX_EYE_VS_CHEEK_MIN
+  };
+}
+
 /* Is this reading usable? A face turned or tipped away foreshortens one side of everything, which
    looks exactly like a genuinely narrower jaw. Better to say so than to measure it. */
 function rxPoseWarning(pose){
@@ -225,5 +297,6 @@ function rxPoseWarning(pose){
 
 if(typeof module !== 'undefined' && module.exports){
   module.exports = { rxSrgbToLab: rxSrgbToLab, rxMedian: rxMedian, rxPatch: rxPatch, rxPoseWarning: rxPoseWarning,
-    RX_MAX_YAW: RX_MAX_YAW, RX_MAX_PITCH: RX_MAX_PITCH };
+    rxEyeVisibility: rxEyeVisibility, RX_MAX_YAW: RX_MAX_YAW, RX_MAX_PITCH: RX_MAX_PITCH,
+    RX_EYE_CONTRAST_MIN: RX_EYE_CONTRAST_MIN, RX_EYE_VS_CHEEK_MIN: RX_EYE_VS_CHEEK_MIN };
 }

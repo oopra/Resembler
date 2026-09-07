@@ -164,6 +164,7 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 .tone-d{ color:var(--tone-d); } .tone-e{ color:var(--tone-e); } .tone-f{ color:var(--tone-f); }
 .line-row .line-name, .line-row .line-share{ color:var(--ink); }
 
+.lineup-note{ grid-column:1 / -1; margin:2px 0 0; font-size:12px; line-height:1.55; color:var(--muted); }
 .mix-line{ font-size:15px; line-height:1.7; padding:12px 14px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px; }
 .mix-line .shared{ color:var(--muted); font-size:13.5px; }
 

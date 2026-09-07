@@ -177,7 +177,7 @@ function rxQuality(frame, focus){
 }
 
 if(typeof module !== 'undefined' && module.exports){
-  module.exports = { RX_OUT_PX: RX_OUT_PX, RX_MIN_FACE_PX: RX_MIN_FACE_PX, RX_FOCUS_MIN: RX_FOCUS_MIN,
+  module.exports = { RX_OUT_PX: RX_OUT_PX, RX_MIN_FACE_PX: RX_MIN_FACE_PX, RX_FOCUS_MIN: RX_FOCUS_MIN, rxDims: rxDims,
     RX_MAX_GAIN: RX_MAX_GAIN, rxDefaultFrame: rxDefaultFrame, rxClampFrame: rxClampFrame, rxBoxToFrame: rxBoxToFrame,
     rxEyeAngle: rxEyeAngle, rxLumaHist: rxLumaHist, rxStretchBounds: rxStretchBounds, rxApplyStretch: rxApplyStretch,
     rxFocusScore: rxFocusScore, rxQuality: rxQuality };

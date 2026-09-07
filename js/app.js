@@ -210,6 +210,7 @@ async function rxAutoFrameCard(card, quiet){
     card.frame = got.frame;
     card.faces = got.faces;
     card.pose = got.pose;
+    card.eyes = got.eyes;
   }else if(!quiet){
     rxStatus('No face was found in that photo. Drag the head into the square yourself, or try a clearer, straight-on picture.', 'note');
   }else{
@@ -235,6 +236,10 @@ function rxShowWarnings(card){
   var w = card.quality ? card.quality.warnings.slice() : [];
   if(card.faces > 1) w.unshift('More than one face in this photo — check the square is on the right person.');
   if(card.src && card.faces === 0) w.unshift('No face found automatically. Frame the head by hand, or use a clearer photo.');
+  // Said here rather than only at the end, because it is the one problem that cannot be worked
+  // around by measuring more carefully — it needs a different photo.
+  if(card.eyes && card.eyes.covered)
+    w.unshift('Both eyes need to be visible — these look covered by sunglasses, a hat brim or deep shadow. Everything is measured relative to the gap between the pupils, so this photo cannot be compared at all.');
   var pose = rxPoseWarning(card.pose);
   if(pose) w.push(pose);
   card.els.warn.hidden = !w.length;
@@ -289,9 +294,13 @@ function rxReadFace(card, jitter){
                              angle: card.frame.angle }, card.dims.w, card.dims.h);
   var out = rxRenderFace(card.src, frame, {});
   var got = rxDetect(out.canvas);
-  if(!got) return { ok: false, prepared: out };
+  if(!got) return { ok: false, why: 'noface', prepared: out };
+  // Sunglasses are not a degraded reading, they are a wrong one: the iris centres are the ruler
+  // every other measurement is scaled and levelled by, and behind a lens the mesh puts them in
+  // confidently wrong places. Nothing measured from this face would mean anything.
+  if(got.eyes && got.eyes.covered) return { ok: false, why: 'eyes', prepared: out, eyes: got.eyes };
   var vals = rxMeasure(got.pts, out.canvas.width, out.canvas.height);
-  if(!vals) return { ok: false, prepared: out };
+  if(!vals) return { ok: false, why: 'noface', prepared: out };
   var colours = rxSampleColours(out.canvas, got.pts);
   Object.keys(colours).forEach(function(k){ vals[k] = colours[k]; });
   return { ok: true, vals: vals, blend: got.blend, pose: got.pose, faces: got.faces, prepared: out };
@@ -315,16 +324,21 @@ async function rxRunComparison(){
     // mesh cannot find a face in is reported and set aside, rather than being carried through as a
     // row of blanks that drag on everyone else's scores.
     var childRead = rxReadFace(rxChild, RX_JITTER[0]);
-    if(!childRead.ok) throw new Error('No face could be found in the child’s photo. Try a clearer, straight-on picture, or frame the head by hand.');
+    if(!childRead.ok) throw new Error(childRead.why === 'eyes'
+      ? 'The child’s eyes are hidden — sunglasses, heavy shadow or a hat brim. Everything here is measured relative to the distance between the pupils, so with the eyes covered there is nothing to measure against. Use a photo where both eyes are visible.'
+      : 'No face could be found in the child’s photo. Try a clearer, straight-on picture, or frame the head by hand.');
     rxChild.pose = childRead.pose; rxChild.faces = childRead.faces;
 
     var firstReads = people.map(function(c){ return rxReadFace(c, RX_JITTER[0]); });
     var failed = [], keep = [];
     firstReads.forEach(function(r, i){
-      if(r.ok) keep.push(i);
-      else failed.push(rxDisplayName(people[i], rxPeople.indexOf(people[i])));
+      if(r.ok){ keep.push(i); return; }
+      var who = rxDisplayName(people[i], rxPeople.indexOf(people[i]));
+      failed.push(r.why === 'eyes'
+        ? who + ': the eyes are hidden — sunglasses, heavy shadow or a hat brim. Every measurement is scaled and levelled by the line between the pupils, so with that line guessed the nose, jaw and face shape would be wrong too, not just the eyes. Left out of the comparison; use a photo with both eyes visible.'
+        : who + ': no face could be found in that photo, so they were left out of the comparison.');
     });
-    if(!keep.length) throw new Error('No face could be found in any of the other photos. Try clearer, straight-on pictures.');
+    if(!keep.length) throw new Error('None of the other photos could be measured — check the notes on each one. Faces need to be straight-on with both eyes visible.');
 
     people = keep.map(function(i){ return people[i]; });
     var names = people.map(function(c){ return rxDisplayName(c, rxPeople.indexOf(c)); });
@@ -483,6 +497,18 @@ function rxRenderLineup(run, overall, verdict){
     rows.appendChild(row);
   });
   box.appendChild(rows);
+
+  // Said on screen, not just in the README: the percentages compare these people with each other,
+  // which is a real comparison. The 0–100 likeness is a ruler of the app's own devising — there is
+  // no database of family noses behind it — so it is fine for "who is closer" and not a statistic.
+  if(run.names.length > 1){
+    var note = document.createElement('p');
+    note.className = 'lineup-note';
+    note.textContent = 'The percentages split the resemblance between these people — that is the ' +
+      'comparison this can actually make. The 0–100 likeness is a relative scale, not a percentage ' +
+      'of anything: use it to see who is closer, not to judge whether 46 is a lot.';
+    box.appendChild(note);
+  }
 }
 
 function rxRenderMix(run, calls){
@@ -565,9 +591,7 @@ function rxRenderCaveats(run, table, calls, verdict){
   var missing = calls.filter(function(c){ return !c.answered; }).map(function(c){ return rxFeature(c.key).short; });
   if(missing.length) items.push('Nothing could be measured for: ' + rxList(missing) + '.');
 
-  run.failed.forEach(function(name){
-    items.push(name + ': no face could be found in that photo, so they were left out of the comparison.');
-  });
+  run.failed.forEach(function(t){ items.push(t); });
   [rxChild].concat(run.people).forEach(function(c, i){
     var who = i === 0 ? (rxChild.name || 'The child') : run.names[i - 1];
     if(c.quality && c.quality.warnings.length) items.push(who + ': ' + c.quality.warnings.join(' '));

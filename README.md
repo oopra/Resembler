@@ -89,6 +89,14 @@ about the cases where an answer should not be given:
   child's mouth uncomparable against one parent, the other parent cannot quietly bank the mouth.
 - **A turned head is flagged, not measured.** Turning a face foreshortens one side of everything,
   which looks exactly like a genuinely narrower jaw.
+- **Covered eyes void the whole reading, not just the eyes.** The two iris centres are the ruler:
+  every measurement is scaled by the gap between them and rotated to level them. Behind dark
+  sunglasses the mesh does not fail — it detects a face confidently and places the irises *on the
+  lenses*, measured on real photographs at 0.13–0.16 of an eye-gap out. So a person whose eyes are
+  covered is excluded from the comparison entirely, and if it is the child, nothing is compared at
+  all. Detected from two signals that separate cleanly (bare eyes vs. dark lenses, measured):
+  sclera-to-iris contrast 0.37–0.85 vs. 0.00, and eye-region brightness against the cheek
+  1.06/0.78 vs. 0.19/0.10.
 - **Two numbers per person, because they answer different questions.** *Likeness* (0–100) is how alike
   they are at all; *share* (summing to 100) is which of you. Two people can be 80 and 78 alike (a
   strong family face, no winner) or 30 and 28 (nobody especially), and share alone cannot tell those
