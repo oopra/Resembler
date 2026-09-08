@@ -25,27 +25,56 @@ if(typeof RX_MEASURES === 'undefined' && typeof require === 'function'){
   globalThis.rxCompare = require('./measure.js').rxCompare;
 }
 
-var RX_FEATURE_MARGIN = 8;   // a feature is "shared" unless someone leads it by this much
-var RX_CLEAR_GAP     = 10;   // "takes after" needs this overall lead, and every reading agreeing
-var RX_LEAN_GAP      = 4;    // "leans towards" needs this much; below it, a genuine mix
+/* These three numbers are the whole of this app's restraint, and the first version got them badly
+   wrong. They were set by judgement; measured against a null distribution built from 4000 simulated
+   three-photo comparisons between UNRELATED people, the old "clear lead" threshold of 10 points fired
+   on pure chance 27% of the time, and the old "lean" threshold of 4 points fired 65% of the time.
+   The app was therefore announcing winners it had not found — which is exactly what it did to one
+   father, on a 14-point gap that chance alone produces 13% of the time.
+
+   They are now set from that null: a gap has to be larger than 75% of chance gaps before the app
+   will say "leans", and larger than 95% of them before it will say "takes after". */
+var RX_FEATURE_MARGIN = 10;  // a feature is "shared" unless someone leads it by this much
+var RX_CLEAR_GAP     = 19;   // "takes after": bigger than 95% of chance gaps
+var RX_LEAN_GAP      = 11;   // "leans towards": bigger than 75% of chance gaps (the null p75 is 10.4)
+
+/* The measured null: how big a winning margin two UNRELATED adults produce against one child, purely
+   by chance. Used to tell you, in plain numbers, how often chance alone would beat what you are
+   looking at. From KinFaceW-II; see tools/README-calibration.md. */
+var RX_NULL_GAP = [
+  { gap: 6.0,  chance: 50 }, { gap: 10.4, chance: 25 }, { gap: 15.6, chance: 10 },
+  { gap: 18.7, chance: 5 },  { gap: 25.2, chance: 1 }
+];
+/* Roughly how often a gap this big turns up between two unrelated people. */
+function rxChanceOf(gap){
+  if(gap >= RX_NULL_GAP[RX_NULL_GAP.length - 1].gap) return 1;
+  for(var i = 0; i < RX_NULL_GAP.length; i++) if(gap < RX_NULL_GAP[i].gap)
+    return i === 0 ? 100 : RX_NULL_GAP[i - 1].chance;
+  return 1;
+}
 /* A feature is scored from several measurements. If an expression knocks out most of them, what is
    left is not really that feature any more — a mouth judged on philtrum length alone is not a mouth.
    Below this fraction of a feature's weight, it stops being attributable to anyone. */
 var RX_MIN_COVERAGE = 0.5;
 
-/* The eight features, weighted towards bone structure — which is what survives the twenty years
-   between a toddler and an adult — and away from colouring, which a camera gets wrong first.
-   Ears and hairline are deliberately absent: a face mesh stops at the face, so they cannot be
-   measured, and guessing at them would be the dishonest half of the answer. */
+/* The eight features. The weights are measured, not chosen: each is the mean measured kin signal of
+   the measurements inside it (see measure.js and tools/README-calibration.md). The previous version
+   of this table weighted colouring LAST, at 0.60, on the reasoning that a camera gets colour wrong
+   and bone structure survives childhood. Against 849 real parent/child pairs, colouring turned out
+   to be far and away the strongest family signal and the bone-structure ratios the weakest — so the
+   ordering here is now upside down compared with what seemed obvious, because the data said so.
+
+   Ears and hairline are still absent: a face mesh stops at the face, so they cannot be measured, and
+   guessing at them would be the dishonest half of the answer. */
 var RX_FEATURES = [
-  { key:'eyes',   label:'Eyes',             short:'eyes',       weight:1.25 },
-  { key:'nose',   label:'Nose',             short:'nose',       weight:1.25 },
-  { key:'shape',  label:'Face shape',       short:'face shape', weight:1.15 },
-  { key:'jaw',    label:'Jaw & chin',       short:'jaw',        weight:1.10 },
-  { key:'mouth',  label:'Mouth & lips',     short:'mouth',      weight:1.00 },
-  { key:'cheeks', label:'Cheeks & midface', short:'cheeks',     weight:0.90 },
-  { key:'brows',  label:'Eyebrows',         short:'eyebrows',   weight:0.90 },
-  { key:'colour', label:'Colouring',        short:'colouring',  weight:0.60 }
+  { key:'colour', label:'Colouring',        short:'colouring',  weight:1.30 },
+  { key:'eyes',   label:'Eyes',             short:'eyes',       weight:0.63 },
+  { key:'mouth',  label:'Mouth & lips',     short:'mouth',      weight:0.62 },
+  { key:'nose',   label:'Nose',             short:'nose',       weight:0.46 },
+  { key:'jaw',    label:'Jaw & chin',       short:'jaw',        weight:0.46 },
+  { key:'brows',  label:'Eyebrows',         short:'eyebrows',   weight:0.46 },
+  { key:'shape',  label:'Face shape',       short:'face shape', weight:0.44 },
+  { key:'cheeks', label:'Cheeks & midface', short:'cheeks',     weight:0.43 }
 ];
 var RX_FEATURE_KEYS = RX_FEATURES.map(function(f){ return f.key; });
 function rxFeature(key){ return RX_FEATURES.filter(function(f){ return f.key === key; })[0] || null; }
@@ -268,7 +297,8 @@ function rxHeadline(verdict, names){
 if(typeof module !== 'undefined' && module.exports){
   module.exports = { RX_FEATURES: RX_FEATURES, RX_FEATURE_KEYS: RX_FEATURE_KEYS,
     RX_FEATURE_MARGIN: RX_FEATURE_MARGIN, RX_CLEAR_GAP: RX_CLEAR_GAP, RX_LEAN_GAP: RX_LEAN_GAP,
-    RX_MIN_COVERAGE: RX_MIN_COVERAGE, rxFeature: rxFeature, rxAttributed: rxAttributed,
+    RX_MIN_COVERAGE: RX_MIN_COVERAGE, RX_NULL_GAP: RX_NULL_GAP, rxChanceOf: rxChanceOf,
+    rxFeature: rxFeature, rxAttributed: rxAttributed,
     rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,
     rxOverall: rxOverall, rxFeatureCall: rxFeatureCall, rxAllCalls: rxAllCalls, rxWonBy: rxWonBy,
     rxFeatureNote: rxFeatureNote, rxStability: rxStability, rxVerdict: rxVerdict, rxHeadline: rxHeadline };

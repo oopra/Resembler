@@ -77,62 +77,72 @@ function rxAngleAt(P, v, a, b){
 
 /* ---- 2. the measurements ----
    `tol` is the difference at which a measurement scores about 37 out of 100 — the scale on which
-   "that is a different nose" starts to mean something. These are a stated convention, not a
-   population statistic: nobody here has a database of family noses. What that means in practice is
-   that the 0–100 number is a way of ranking people against each other on the same ruler, and should
-   not be read as "72% of noses". The comparison between candidates is the real output; the absolute
-   figure is the scale it is drawn on.
+   "that is a different nose" starts to mean something. These remain a stated convention.
+
+   `w` IS NOT A CONVENTION ANY MORE. Every weight below is measured, not chosen: each one is
+   proportional to how well that measurement separates 849 real parent/child pairs from the same
+   number of unrelated pairs, on the KinFaceW-II kinship dataset (Lu et al., PAMI 2014). See
+   tools/README-calibration.md.
+
+   The first version of this file guessed these weights, reasoning that bone structure survives
+   childhood and colouring is what a camera gets wrong. Measured against real families, that guess
+   correlated with the truth at 0.09 — no better than picking numbers out of the air, and backwards
+   in its central claim. Colouring is the strongest family signal there is here; the carefully
+   reasoned bone-structure ratios are the weakest. Half the colour signal turned out to be shared
+   photograph lighting (the dataset crops parent and child from one picture), which is why faces are
+   now white-balanced individually before colour is read — but the half that survives that still
+   beats every geometric measurement.
 
    `expr` lists the blendshapes that move a measurement. If either face is pulling one hard, the
    measurement is not comparable and is dropped rather than believed. */
 var RX_MEASURES = [
   // eyes
-  { key:'eye_width',    feature:'eyes',   label:'eye width',            tol:0.055, w:1.0 },
-  { key:'intercanthal', feature:'eyes',   label:'gap between the eyes', tol:0.070, w:1.2 },
-  { key:'eye_open',     feature:'eyes',   label:'eye opening',          tol:0.085, w:0.6, expr:['eyeBlinkLeft','eyeBlinkRight','eyeSquintLeft','eyeSquintRight','eyeWideLeft','eyeWideRight'] },
-  { key:'canthal_tilt', feature:'eyes',   label:'tilt of the eye',      tol:4.0,   w:1.0, deg:true },
+  { key:'eye_width',    feature:'eyes',   label:'eye width',            tol:0.055, w:0.57 },
+  { key:'intercanthal', feature:'eyes',   label:'gap between the eyes', tol:0.070, w:0.31 },
+  { key:'eye_open',     feature:'eyes',   label:'eye opening',          tol:0.085, w:1.13, expr:['eyeBlinkLeft','eyeBlinkRight','eyeSquintLeft','eyeSquintRight','eyeWideLeft','eyeWideRight'] },
+  { key:'canthal_tilt', feature:'eyes',   label:'tilt of the eye',      tol:4.0,   w:0.56, deg:true },
   // brows
-  { key:'brow_lift',    feature:'brows',  label:'brow height',          tol:0.070, w:0.9, expr:['browDownLeft','browDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight'] },
-  { key:'brow_gap',     feature:'brows',  label:'gap between the brows',tol:0.075, w:0.9 },
-  { key:'brow_peak',    feature:'brows',  label:'where the brow arches',tol:0.090, w:0.8 },
-  { key:'brow_tilt',    feature:'brows',  label:'brow angle',           tol:5.0,   w:0.8, deg:true, expr:['browDownLeft','browDownRight','browInnerUp'] },
+  { key:'brow_lift',    feature:'brows',  label:'brow height',          tol:0.070, w:0.54, expr:['browDownLeft','browDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight'] },
+  { key:'brow_gap',     feature:'brows',  label:'gap between the brows',tol:0.075, w:0.27 },
+  { key:'brow_peak',    feature:'brows',  label:'where the brow arches',tol:0.090, w:0.65 },
+  { key:'brow_tilt',    feature:'brows',  label:'brow angle',           tol:5.0,   w:0.41, deg:true, expr:['browDownLeft','browDownRight','browInnerUp'] },
   // nose
-  { key:'alar_width',   feature:'nose',   label:'width of the nose',    tol:0.055, w:1.3 },
-  { key:'nose_len',     feature:'nose',   label:'length of the nose',   tol:0.070, w:1.1 },
-  { key:'nose_wl',      feature:'nose',   label:'nose width vs length', tol:0.075, w:1.2 },
-  { key:'nostril_w',    feature:'nose',   label:'nostril spread',       tol:0.070, w:0.7 },
-  { key:'tip_proj',     feature:'nose',   label:'how far the tip juts', tol:0.090, w:0.5 },
+  { key:'alar_width',   feature:'nose',   label:'width of the nose',    tol:0.055, w:0.65 },
+  { key:'nose_len',     feature:'nose',   label:'length of the nose',   tol:0.070, w:0.31 },
+  { key:'nose_wl',      feature:'nose',   label:'nose width vs length', tol:0.075, w:0.82 },
+  { key:'nostril_w',    feature:'nose',   label:'nostril spread',       tol:0.070, w:0.28 },
+  { key:'tip_proj',     feature:'nose',   label:'how far the tip juts', tol:0.090, w:0.29 },
   // mouth
-  { key:'mouth_w',      feature:'mouth',  label:'mouth width',          tol:0.070, w:1.1, expr:['mouthSmileLeft','mouthSmileRight','mouthPucker','mouthFunnel'] },
-  { key:'lip_upper',    feature:'mouth',  label:'upper lip',            tol:0.040, w:1.0, expr:['jawOpen','mouthPucker','mouthFunnel'] },
-  { key:'lip_lower',    feature:'mouth',  label:'lower lip',            tol:0.045, w:1.0, expr:['jawOpen','mouthPucker','mouthFunnel'] },
-  { key:'lip_balance',  feature:'mouth',  label:'upper vs lower lip',   tol:0.130, w:1.1, expr:['jawOpen','mouthPucker'] },
-  { key:'philtrum',     feature:'mouth',  label:'philtrum length',      tol:0.055, w:0.9 },
+  { key:'mouth_w',      feature:'mouth',  label:'mouth width',          tol:0.070, w:1.14, expr:['mouthSmileLeft','mouthSmileRight','mouthPucker','mouthFunnel'] },
+  { key:'lip_upper',    feature:'mouth',  label:'upper lip',            tol:0.040, w:0.63, expr:['jawOpen','mouthPucker','mouthFunnel'] },
+  { key:'lip_lower',    feature:'mouth',  label:'lower lip',            tol:0.045, w:0.54, expr:['jawOpen','mouthPucker','mouthFunnel'] },
+  { key:'lip_balance',  feature:'mouth',  label:'upper vs lower lip',   tol:0.130, w:0.50, expr:['jawOpen','mouthPucker'] },
+  { key:'philtrum',     feature:'mouth',  label:'philtrum length',      tol:0.055, w:0.32 },
   // cheeks and midface
-  { key:'cheek_w',      feature:'cheeks', label:'cheekbone width',      tol:0.085, w:1.1 },
-  { key:'cheek_drop',   feature:'cheeks', label:'cheekbone height',     tol:0.080, w:0.9 },
-  { key:'midface',      feature:'cheeks', label:'midface depth',        tol:0.075, w:0.9 },
+  { key:'cheek_w',      feature:'cheeks', label:'cheekbone width',      tol:0.085, w:0.60 },
+  { key:'cheek_drop',   feature:'cheeks', label:'cheekbone height',     tol:0.080, w:0.43 },
+  { key:'midface',      feature:'cheeks', label:'midface depth',        tol:0.075, w:0.28 },
   // jaw and chin
-  { key:'bigonial',     feature:'jaw',    label:'jaw width',            tol:0.090, w:1.1, expr:['jawOpen'] },
-  { key:'taper',        feature:'jaw',    label:'jaw vs cheekbone',     tol:0.070, w:1.2, expr:['jawOpen'] },
-  { key:'chin_h',       feature:'jaw',    label:'chin height',          tol:0.065, w:1.0, expr:['jawOpen'] },
-  { key:'chin_w',       feature:'jaw',    label:'chin width',           tol:0.065, w:1.0 },
-  { key:'gonial',       feature:'jaw',    label:'angle of the jaw',     tol:6.0,   w:1.0, deg:true, expr:['jawOpen'] },
+  { key:'bigonial',     feature:'jaw',    label:'jaw width',            tol:0.090, w:0.59, expr:['jawOpen'] },
+  { key:'taper',        feature:'jaw',    label:'jaw vs cheekbone',     tol:0.070, w:0.36, expr:['jawOpen'] },
+  { key:'chin_h',       feature:'jaw',    label:'chin height',          tol:0.065, w:0.70, expr:['jawOpen'] },
+  { key:'chin_w',       feature:'jaw',    label:'chin width',           tol:0.065, w:0.39 },
+  { key:'gonial',       feature:'jaw',    label:'angle of the jaw',     tol:6.0,   w:0.27, deg:true, expr:['jawOpen'] },
   // overall shape
-  { key:'face_w',       feature:'shape',  label:'face width',           tol:0.100, w:1.0 },
-  { key:'face_h',       feature:'shape',  label:'face height',          tol:0.110, w:0.9, expr:['jawOpen'] },
-  { key:'face_wh',      feature:'shape',  label:'face width vs height', tol:0.070, w:1.3, expr:['jawOpen'] },
-  { key:'third_up',     feature:'shape',  label:'forehead share',       tol:0.045, w:1.0 },
-  { key:'third_mid',    feature:'shape',  label:'midface share',        tol:0.040, w:1.0 },
-  { key:'third_low',    feature:'shape',  label:'lower-face share',     tol:0.045, w:1.0, expr:['jawOpen'] },
-  { key:'forehead_w',   feature:'shape',  label:'forehead width',       tol:0.085, w:0.8 },
+  { key:'face_w',       feature:'shape',  label:'face width',           tol:0.100, w:0.59 },
+  { key:'face_h',       feature:'shape',  label:'face height',          tol:0.110, w:0.34, expr:['jawOpen'] },
+  { key:'face_wh',      feature:'shape',  label:'face width vs height', tol:0.070, w:0.38, expr:['jawOpen'] },
+  { key:'third_up',     feature:'shape',  label:'forehead share',       tol:0.045, w:0.37 },
+  { key:'third_mid',    feature:'shape',  label:'midface share',        tol:0.040, w:0.52 },
+  { key:'third_low',    feature:'shape',  label:'lower-face share',     tol:0.045, w:0.38, expr:['jawOpen'] },
+  { key:'forehead_w',   feature:'shape',  label:'forehead width',       tol:0.085, w:0.53 },
   // colouring — sampled from the picture, not from the mesh (see rxSampleColours in mesh.js)
-  { key:'skin_L',       feature:'colour', label:'skin lightness',       tol:11.0,  w:0.7 },
-  { key:'skin_a',       feature:'colour', label:'skin warmth',          tol:3.5,   w:1.0 },
-  { key:'skin_b',       feature:'colour', label:'skin tone',            tol:4.5,   w:1.0 },
-  { key:'eye_L',        feature:'colour', label:'eye lightness',        tol:13.0,  w:0.8 },
-  { key:'eye_a',        feature:'colour', label:'eye colour (green–red)', tol:3.0, w:1.1 },
-  { key:'eye_b',        feature:'colour', label:'eye colour (blue–yellow)', tol:4.0, w:1.1 }
+  { key:'skin_L',       feature:'colour', label:'skin lightness',       tol:11.0,  w:1.13 },
+  { key:'skin_a',       feature:'colour', label:'skin warmth',          tol:3.5,   w:1.12 },
+  { key:'skin_b',       feature:'colour', label:'skin tone',            tol:4.5,   w:1.31 },
+  { key:'eye_L',        feature:'colour', label:'eye lightness',        tol:13.0,  w:1.26 },
+  { key:'eye_a',        feature:'colour', label:'eye colour (green–red)', tol:3.0, w:1.68 },
+  { key:'eye_b',        feature:'colour', label:'eye colour (blue–yellow)', tol:4.0, w:1.41 }
 ];
 var RX_MEASURE_BY_KEY = {};
 RX_MEASURES.forEach(function(m){ RX_MEASURE_BY_KEY[m.key] = m; });

@@ -451,15 +451,23 @@ function rxRenderVerdict(run, overall, verdict){
   if(verdict.confidence === 'only'){
     sub = 'Only one person had a photo, so there is nothing to weigh this against — a likeness of ' +
           rxPct(overall.raw[verdict.leader]) + '/100 means little on its own. Add someone else to compare with.';
-  }else if(verdict.confidence === 'clear'){
-    sub = 'A clear lead — ' + Math.round(verdict.gap) + ' points ahead of ' + run.names[verdict.runnerUp] +
-          ', and every reading agreed.';
-  }else if(verdict.confidence === 'lean'){
-    sub = 'A lean, not a landslide: ' + Math.round(verdict.gap) + ' points ahead of ' + run.names[verdict.runnerUp] + '.' +
-          (verdict.stability < 1 ? ' The readings did not all agree, so treat it lightly.' : '');
   }else{
-    sub = 'The scores are too close to call a winner — ' + Math.round(verdict.gap) +
-          ' points between the top two. This little one is genuinely a bit of both.';
+    // Every verdict is quoted against the measured null: how often two UNRELATED adults produce a
+    // winning margin this big against one child, by chance alone. Without that number a gap is just
+    // a number, and this app spent its first version reading noise as a result.
+    var gap = Math.round(verdict.gap);
+    var chance = rxChanceOf(verdict.gap);
+    var odds = 'A gap this size turns up between two unrelated people about ' + chance + '% of the time.';
+    if(verdict.confidence === 'clear'){
+      sub = gap + ' points ahead of ' + run.names[verdict.runnerUp] + ', and every reading agreed. ' + odds;
+    }else if(verdict.confidence === 'lean'){
+      sub = 'A lean, not a landslide: ' + gap + ' points ahead of ' + run.names[verdict.runnerUp] + '. ' + odds +
+            (verdict.stability < 1 ? ' The readings also disagreed with each other, so treat it lightly.' : '');
+    }else{
+      sub = 'Too close to call: ' + gap + ' points between the top two. ' + odds +
+            ' On a difference that small this is not telling you anything — it is a genuine mix, ' +
+            'or the photographs cannot separate them.';
+    }
   }
   box.className = 'verdict v-' + verdict.confidence;
   box.innerHTML = '<p class="v-lead"></p><p class="v-sub"></p>';

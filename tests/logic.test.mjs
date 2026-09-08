@@ -473,3 +473,48 @@ test('rxEyeVisibility: a degenerate reading is not reported as sunglasses', () =
   const flat = Array.from({ length: 478 }, () => [0.5, 0.5, 0]);   // every point on top of the others
   assert.equal(G.rxEyeVisibility(eyeCanvas({ lens: false }), flat).covered, false);
 });
+
+/* ---------- calibrated against real families ---------- */
+
+test('rxChanceOf: a verdict is quoted against how often chance produces the same gap', () => {
+  assert.equal(R.rxChanceOf(3), 100, 'a tiny gap is what chance does most of the time');
+  assert.equal(R.rxChanceOf(8), 50);
+  assert.equal(R.rxChanceOf(12), 25);
+  assert.equal(R.rxChanceOf(17), 10);
+  assert.equal(R.rxChanceOf(20), 5);
+  assert.equal(R.rxChanceOf(40), 1, 'a huge gap is rare by chance, never impossible');
+});
+
+test('the thresholds sit above the measured noise, not below it', () => {
+  // The first version called a 10-point gap a "clear lead". Chance alone produces gaps that big
+  // 27% of the time, which is how a father was confidently told the wrong thing.
+  const chanceAt = (g) => R.rxChanceOf(g);
+  assert.ok(chanceAt(R.RX_CLEAR_GAP) <= 5, `"takes after" at ${R.RX_CLEAR_GAP} points must beat 95% of chance gaps`);
+  assert.ok(chanceAt(R.RX_LEAN_GAP) <= 25, `"leans" at ${R.RX_LEAN_GAP} points must beat 75% of chance gaps`);
+  assert.ok(R.RX_CLEAR_GAP > R.RX_LEAN_GAP);
+});
+
+test('weights come from measured kin signal, not from what sounded plausible', () => {
+  // Colouring measured as the strongest family signal and must not be weighted below the geometry
+  // again; the reasoning that talked the first version into doing so was wrong.
+  const colour = R.rxFeature('colour').weight;
+  for (const f of R.RX_FEATURES) {
+    if (f.key === 'colour') continue;
+    assert.ok(colour > f.weight, `colouring (${colour}) should outweigh ${f.key} (${f.weight})`);
+  }
+  const byKey = M.RX_MEASURE_BY_KEY;
+  assert.ok(byKey.skin_b.w > byKey.nose_len.w, 'skin tone carries more family signal than nose length');
+  assert.ok(byKey.eye_a.w > byKey.gonial.w, 'eye colour carries more than the jaw angle');
+});
+
+test('rxWhiteBalance: removes a colour cast, leaves a neutral face alone', () => {
+  // Two photos taken in one session share a cast; without this they collect credit for it.
+  const warm = new Uint8ClampedArray([200, 150, 100, 255, 180, 130, 80, 255]);
+  const before = warm[0] - warm[2];
+  F.rxWhiteBalance(warm);
+  assert.ok(warm[0] - warm[2] < before, 'the orange cast is pulled towards neutral');
+  const neutral = new Uint8ClampedArray([120, 120, 120, 255, 130, 130, 130, 255]);
+  const copy = [...neutral];
+  F.rxWhiteBalance(neutral);
+  assert.deepEqual([...neutral], copy, 'an already-neutral image is untouched');
+});

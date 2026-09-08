@@ -14,6 +14,16 @@ A static site. No build step, no framework, no bundler.
 
 ---
 
+## What it can and cannot do
+
+Benchmarked on 849 real parent/child pairs, it separates kin from strangers with an **AUC of 0.734** —
+a weak but real signal. It **cannot reliably tell which of two parents a child takes after**: true
+pairs score 51.7 against strangers' 44.7, a 7-point separation with ~8 points of spread, and telling
+one parent from another (both of whom are kin) is a far finer distinction than that. It will now say
+"too close to call" often, because that is usually the true answer. The full study, including two of
+my own hypotheses that turned out to be wrong, is in
+**[tools/README-calibration.md](tools/README-calibration.md)**.
+
 ## The honest bit, first
 
 This measures **what two faces look like in two photographs**. That is all it is, and the app says so
@@ -68,19 +78,27 @@ Similarity for each measurement is `100 × exp(−|difference| ÷ tolerance)`: i
 tolerance away is 37, two is 14. A smooth curve, so no single measurement flips a verdict by moving a
 hair.
 
-> **On the tolerances.** They are a stated convention, not a population statistic — nobody here has a
-> database of family noses. So the 0–100 figure is the ruler that lets people be ranked against each
-> other, and should not be read as "72% of noses". *The comparison between candidates is the real
-> output; the absolute number is the scale it is drawn on.*
+> **On the weights.** They are measured, not chosen. Each is proportional to how well that
+> measurement separates 849 real parent/child pairs from unrelated pairs, on the KinFaceW-II kinship
+> dataset — see **[tools/README-calibration.md](tools/README-calibration.md)**. An earlier version
+> guessed them, reasoning that bone structure survives childhood and colouring is what a camera gets
+> wrong first. Measured against real families that guess correlated with the truth at **0.09**, and
+> was backwards: colouring is the strongest family signal in the app and the bone-structure ratios
+> the weakest. The tolerances are still a convention; the weights no longer are.
 
 ### 3. Refuse to overclaim
 
 `js/resemble.js` rolls measurements into features and features into a verdict, and most of it is
 about the cases where an answer should not be given:
 
-- **A feature needs an 8-point lead** to be attributed to anyone. Otherwise it is *shared*.
-- **The headline needs a 10-point lead and unanimity** to say "Takes after". At 4 points it is
-  "Leans towards". Below that it is "A genuine mix", because it is.
+- **The thresholds come from a measured null distribution**: 4000 simulated comparisons between one
+  child and two *unrelated* adults, recording the winning margin chance alone produces. The headline
+  needs a **19-point** lead to say "Takes after" (bigger than 95% of chance gaps) and **11** to say
+  "Leans towards" (bigger than 75%). The earlier thresholds of 10 and 4 fired on pure chance 27% and
+  65% of the time respectively — the app was announcing winners it had not found.
+- **Every verdict is quoted against chance**: "a gap this size turns up between two unrelated people
+  about X% of the time". A number without that context is how the first version misled people.
+- **A feature needs a 10-point lead** to be attributed to anyone. Otherwise it is *shared*.
 - **Expressions are excluded, not tolerated.** A grin genuinely widens a mouth, so measurements that
   an expression moves are dropped when either photo is pulling that face — and the result tells you
   which ones and why. If that leaves less than half of a feature, the feature is not scored at all: a
