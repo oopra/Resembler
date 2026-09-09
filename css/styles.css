@@ -116,7 +116,20 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 .tools{ margin-top:8px; display:grid; gap:7px; }
 .zoom{ width:100%; accent-color:var(--accent); }
 .tool-row{ display:flex; flex-wrap:wrap; gap:5px; }
-.warn{ margin:8px 0 0; font-size:12px; line-height:1.5; color:var(--warn); }
+.warn{ margin:6px 0 0; font-size:12px; line-height:1.5; color:var(--warn); }
+.worn{ border:1px solid var(--line); border-radius:8px; padding:6px 8px 8px; margin:2px 0 0;
+  display:flex; flex-wrap:wrap; gap:4px; }
+.worn legend{ font-size:11px; color:var(--muted); padding:0 4px; }
+.chip{ display:inline-flex; align-items:center; gap:4px; font-size:11.5px; color:var(--muted);
+  border:1px solid var(--line); border-radius:999px; padding:3px 8px; cursor:pointer; }
+.chip input{ margin:0; accent-color:var(--accent); width:12px; height:12px; }
+.chip:has(input:checked){ color:var(--ink); border-color:var(--accent); }
+.chip-costly:has(input:checked){ border-color:var(--warn); color:var(--warn); }
+.ready{ margin:8px 0 0; font-size:12px; font-weight:600; letter-spacing:.02em; }
+.ready-good{ color:var(--ok); }
+.ready-noted{ color:var(--muted); }
+.ready-limited{ color:var(--warn); }
+.ready-stop{ color:var(--bad); }
 
 /* ---------- passes ---------- */
 .passes{ border:1px solid var(--line); border-radius:10px; padding:10px 12px 12px; margin:0 0 12px; }

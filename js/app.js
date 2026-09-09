@@ -62,15 +62,32 @@ function rxBuildCard(card, index){
         '<button type="button" class="tiny auto">Find the face</button>' +
         '<button type="button" class="tiny change">Change photo</button>' +
       '</div>' +
+      '<fieldset class="worn">' +
+        '<legend>Anything worn in this photo?</legend>' +
+        RX_OCCLUDERS.map(function(o){
+          return '<label class="chip' + (o.costly ? ' chip-costly' : '') + '">' +
+                 '<input type="checkbox" value="' + o.id + '"><span>' + o.label + '</span></label>';
+        }).join('') +
+      '</fieldset>' +
     '</div>' +
+    '<p class="ready" hidden></p>' +
     '<p class="warn" hidden></p>';
 
   card.el = el;
   card.els = {
     name: el.querySelector('.name-in'), frame: el.querySelector('.frame'), canvas: el.querySelector('.preview'),
     empty: el.querySelector('.empty'), file: el.querySelector('.file'), tools: el.querySelector('.tools'),
-    zoom: el.querySelector('.zoom'), warn: el.querySelector('.warn'), remove: el.querySelector('.x')
+    zoom: el.querySelector('.zoom'), warn: el.querySelector('.warn'), remove: el.querySelector('.x'),
+    ready: el.querySelector('.ready'), worn: el.querySelector('.worn')
   };
+  card.worn = [];
+  Array.prototype.forEach.call(card.els.worn.querySelectorAll('input'), function(box){
+    box.addEventListener('change', function(){
+      card.worn = Array.prototype.filter.call(card.els.worn.querySelectorAll('input'), function(b){ return b.checked; })
+                       .map(function(b){ return b.value; });
+      rxShowWarnings(card);
+    });
+  });
   if(card.name) card.els.name.value = card.name;
 
   card.els.name.addEventListener('input', function(){ card.name = card.els.name.value.trim(); });
@@ -232,18 +249,64 @@ function rxPreview(card){
   });
 }
 
+/* Every photo gets a verdict of its own, on the card, before you ever press Compare — because
+   "the answer was rubbish" is nearly always "one of the photos could not be read", and finding that
+   out at the end is finding it out too late. Three states, and the fatal one is stated as fatal. */
 function rxShowWarnings(card){
-  var w = card.quality ? card.quality.warnings.slice() : [];
-  if(card.faces > 1) w.unshift('More than one face in this photo — check the square is on the right person.');
-  if(card.src && card.faces === 0) w.unshift('No face found automatically. Frame the head by hand, or use a clearer photo.');
-  // Said here rather than only at the end, because it is the one problem that cannot be worked
-  // around by measuring more carefully — it needs a different photo.
+  var stop = [], warn = [];
+
+  if(card.src && card.faces === 0)
+    stop.push('No face found here. Frame the head by hand, or use a clearer, straight-on photo.');
   if(card.eyes && card.eyes.covered)
-    w.unshift('Both eyes need to be visible — these look covered by sunglasses, a hat brim or deep shadow. Everything is measured relative to the gap between the pupils, so this photo cannot be compared at all.');
-  var pose = rxPoseWarning(card.pose);
-  if(pose) w.push(pose);
-  card.els.warn.hidden = !w.length;
-  card.els.warn.textContent = w.join(' ');
+    stop.push('Both eyes must be visible — these look covered by sunglasses, a brim or deep shadow. ' +
+              'Everything is measured relative to the gap between the pupils, so nothing here can be measured.');
+  if(card.pose && Math.abs(card.pose.yaw) > 30)
+    stop.push('This face is turned ' + Math.round(Math.abs(card.pose.yaw)) + '° away — too far to measure. ' +
+              'One side of every width is hidden. Use a straight-on photo.');
+
+  if(card.faces > 1) warn.push('More than one face here — check the square is on the right person.');
+  if(card.quality) card.quality.warnings.forEach(function(t){ warn.push(t); });
+  if(!stop.length){ var pose = rxPoseWarning(card.pose); if(pose) warn.push(pose); }
+
+  // What the tick boxes cost. Almost everything is free; colour is not, and says so.
+  var cost = 0, worn = [];
+  (card.worn || []).forEach(function(id){
+    var o = RX_OCCLUDER_BY_ID[id];
+    if(!o) return;
+    worn.push(o.label.toLowerCase());
+    cost += o.cost;
+  });
+  if(worn.length){
+    warn.push(rxList(worn).replace(/^./, function(c){ return c.toUpperCase(); }) +
+      ': the measurements those affect are left out. ' +
+      (cost >= 0.02
+        ? 'That one has a real cost — colour is the strongest family signal here, and without it the ' +
+          'comparison gets noticeably weaker. A photo without it compares much better.'
+        : 'Measured on real families, leaving those out costs nothing.'));
+  }
+
+  card.els.ready.hidden = false;
+  if(stop.length){
+    card.els.ready.className = 'ready ready-stop';
+    card.els.ready.textContent = 'Cannot be compared';
+  }else if(!card.src){
+    card.els.ready.hidden = true;
+  }else if(cost >= 0.02 || warn.length > worn.length){
+    // A real problem with the photograph, or a tick box that genuinely costs accuracy.
+    card.els.ready.className = 'ready ready-limited';
+    card.els.ready.textContent = cost >= 0.02 ? 'Usable, but weakened' : 'Usable, with a caveat';
+  }else if(warn.length){
+    // Only free exclusions: worth stating, not worth alarming about.
+    card.els.ready.className = 'ready ready-noted';
+    card.els.ready.textContent = 'Good to compare, with some measurements left out';
+  }else{
+    card.els.ready.className = 'ready ready-good';
+    card.els.ready.textContent = 'Good to compare';
+  }
+
+  var all = stop.concat(warn);
+  card.els.warn.hidden = !all.length;
+  card.els.warn.textContent = all.join(' ');
 }
 
 /* ============================ the roster ============================ */
@@ -347,7 +410,11 @@ async function rxRunComparison(){
     var faceCounts = keep.map(function(i){ return firstReads[i].faces; });
     var childPrepared = childRead.prepared, childBlend = childRead.blend;
 
-    var blocked = keep.map(function(i){ return rxBlocked(childBlend, firstReads[i].blend); });
+    var childWorn = rxOccluderBlocks(rxChild.worn);
+    var blocked = keep.map(function(i){
+      return rxMergeBlocks(rxBlocked(childBlend, firstReads[i].blend),
+                           rxMergeBlocks(childWorn, rxOccluderBlocks(people[i].worn)));
+    });
     var expressionNotes = rxExpressionNotes(childBlend, keep.map(function(i){ return firstReads[i]; }), names, blocked);
     var rounds = [rxRound(childRead.vals, keep.map(function(i){ return firstReads[i].vals; }), blocked)];
 
@@ -360,7 +427,10 @@ async function rxRunComparison(){
       var others = people.map(function(c){ return rxReadFace(c, jitter); });
       if(!again.ok || others.some(function(r){ return !r.ok; })) continue;   // a wobbly re-crop is not a failure
       rounds.push(rxRound(again.vals, others.map(function(r){ return r.vals; }),
-                          others.map(function(r){ return rxBlocked(again.blend, r.blend); })));
+                          others.map(function(r, i2){
+                            return rxMergeBlocks(rxBlocked(again.blend, r.blend),
+                                                 rxMergeBlocks(childWorn, rxOccluderBlocks(people[i2].worn)));
+                          })));
     }
 
     rxStatus('');
@@ -609,6 +679,16 @@ function rxRenderCaveats(run, table, calls, verdict){
     if(fc > 1) items.push(who + ': more than one face in that photo — the biggest was used.');
   });
   run.expressionNotes.forEach(function(t){ items.push(t); });
+  ([[rxChild, rxChild.name || 'The child']].concat(run.people.map(function(c, i){ return [c, run.names[i]]; })))
+    .forEach(function(pair){
+      var worn = (pair[0].worn || []).map(function(id){ return RX_OCCLUDER_BY_ID[id]; }).filter(Boolean);
+      if(!worn.length) return;
+      var costly = worn.filter(function(o){ return o.costly; });
+      items.push(pair[1] + ': ' + rxList(worn.map(function(o){ return o.label.toLowerCase(); })) +
+        ' — the affected measurements were left out. ' +
+        (costly.length ? 'Leaving out colour weakens the comparison noticeably.'
+                       : 'On real families that costs nothing measurable.'));
+    });
 
   items = items.filter(function(t, i){ return items.indexOf(t) === i; });
   if(!items.length){ box.hidden = true; box.innerHTML = ''; return; }

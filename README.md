@@ -99,6 +99,16 @@ about the cases where an answer should not be given:
 - **Every verdict is quoted against chance**: "a gap this size turns up between two unrelated people
   about X% of the time". A number without that context is how the first version misled people.
 - **A feature needs a 10-point lead** to be attributed to anyone. Otherwise it is *shared*.
+- **Hats, beards, make-up and glasses are routed around, not "removed".** Nothing here reconstructs
+  what is underneath — that would be a model inventing a face and this app then measuring the
+  invention. Instead you tick what is in the photo and the measurements it corrupts are left out.
+  Measured on 849 real pairs, leaving out the forehead (hat), jawline (beard), lips (lipstick) or eye
+  outline (glasses, liner) costs **nothing** — every one of those changes sits inside its confidence
+  interval. Only the two colour boxes, foundation and coloured lenses, cost real accuracy (−0.027 and
+  −0.044 AUC), and the card says so when you tick them.
+- **Every photo gets its own verdict before you press Compare** — *Good to compare*, *usable with
+  some measurements left out*, *usable but weakened*, or *cannot be compared* — with the reason
+  spelled out. Finding out at the end that one photo was unreadable is finding out too late.
 - **Expressions are excluded, not tolerated.** A grin genuinely widens a mouth, so measurements that
   an expression moves are dropped when either photo is pulling that face — and the result tells you
   which ones and why. If that leaves less than half of a feature, the feature is not scored at all: a

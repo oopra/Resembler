@@ -437,6 +437,66 @@ test('covered eyes are flagged on the card as soon as the photo is added', async
   });
   await addPhoto(page, '#childSlots .file', 1);
   const warn = await page.textContent('#childSlots .warn');
-  assert.match(warn, /Both eyes need to be visible/);
+  assert.match(warn, /Both eyes must be visible/);
   assert.equal(await page.isHidden('#childSlots .warn'), false, 'and it is actually on screen');
+});
+
+/* ---------- every photo says whether it can be used ---------- */
+
+test('a good photo says so, before you press anything', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  assert.equal(await page.textContent('#childSlots .ready'), 'Good to compare');
+  assert.equal(await page.getAttribute('#childSlots .ready', 'class'), 'ready ready-good');
+});
+
+test('a photo that cannot be used says CANNOT, not a hint buried at the end', async () => {
+  await stubMesh(page, [A]);
+  await page.evaluate(() => {
+    const real = window.rxAutoFrameFromMesh;
+    window.rxAutoFrameFromMesh = async (s) => ({ ...(await real(s)), pose: { yaw: 41, pitch: 0, roll: 0 } });
+  });
+  await addPhoto(page, '#childSlots .file', 1);
+  assert.equal(await page.textContent('#childSlots .ready'), 'Cannot be compared');
+  assert.match(await page.textContent('#childSlots .warn'), /turned 41° away/);
+});
+
+test('ticking a free box leaves those measurements out and says it costs nothing', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.check('#childSlots .worn input[value="hat"]');
+  assert.match(await page.textContent('#childSlots .ready'), /Good to compare, with some measurements left out/);
+  assert.equal(await page.getAttribute('#childSlots .ready', 'class'), 'ready ready-noted',
+    'a free exclusion is stated, not alarmed about');
+  const warn = await page.textContent('#childSlots .warn');
+  assert.match(warn, /Hat or fringe/);
+  assert.match(warn, /costs nothing/);
+});
+
+test('ticking a box that removes colour warns that it really does cost something', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.check('#childSlots .worn input[value="foundation"]');
+  assert.equal(await page.textContent('#childSlots .ready'), 'Usable, but weakened');
+  assert.match(await page.textContent('#childSlots .warn'), /colour is the strongest family signal/);
+});
+
+test('what someone was wearing is carried through into the result', async () => {
+  await stubMesh(page, [A, A, B]);
+  await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
+  await page.check('#peopleSlots .card:nth-child(2) .worn input[value="beard"]');
+  await setPasses(page, 1);
+  await runCompare(page);
+
+  const r = await page.evaluate(() => ({
+    caveats: document.getElementById('caveats').textContent,
+    jaw: rxLastRun.calls.find((c) => c.key === 'jaw'),
+    jawAttributed: rxAttributed(rxLastRun.calls.find((c) => c.key === 'jaw'))
+  }));
+  assert.match(r.caveats, /Dad: beard or stubble/);
+  assert.match(r.caveats, /costs nothing measurable/);
+  // Mum still has a jaw score, Dad does not — so the jaw is "not comparable for everyone" and is
+  // kept out of the overall entirely. Mum must not win the jaw by walkover because Dad has a beard.
+  assert.equal(r.jaw.partial, true);
+  assert.equal(r.jawAttributed, false, 'nobody is handed the jaw because the other one has a beard');
 });

@@ -518,3 +518,58 @@ test('rxWhiteBalance: removes a colour cast, leaves a neutral face alone', () =>
   F.rxWhiteBalance(neutral);
   assert.deepEqual([...neutral], copy, 'an already-neutral image is untouched');
 });
+
+/* ---------- things worn on a face ---------- */
+
+test('rxOccluderBlocks: a hat blocks the forehead measurements and nothing else', () => {
+  const b = M.rxOccluderBlocks(['hat']);
+  assert.equal(b.third_up, true);
+  assert.equal(b.forehead_w, true);
+  assert.ok(!b.alar_width, 'a hat does not touch the nose');
+  assert.ok(!b.skin_a, 'nor the colouring');
+  assert.deepEqual(b.__worn, ['hat']);
+});
+
+test('rxOccluderBlocks: nothing ticked blocks nothing', () => {
+  const b = M.rxOccluderBlocks([]);
+  assert.equal(Object.keys(b).filter((k) => !k.startsWith('__')).length, 0);
+  assert.deepEqual(M.rxOccluderBlocks(['nonsense']).__worn, [], 'an unknown id is ignored, not obeyed');
+});
+
+test('rxMergeBlocks: an expression and a hat combine without either clobbering the other', () => {
+  const merged = M.rxMergeBlocks(M.rxBlocked({ jawOpen: 0.9 }, {}), M.rxOccluderBlocks(['hat']));
+  assert.equal(merged.lip_upper, true, 'from the open mouth');
+  assert.equal(merged.third_up, true, 'from the hat');
+  assert.ok(merged.__reasons.includes('jawOpen'));
+  assert.deepEqual(merged.__worn, ['hat']);
+});
+
+test('the free exclusions really are free, and the costly ones are flagged', () => {
+  // Costs are measured on 849 real pairs, not asserted — see tools/README-calibration.md.
+  for (const id of ['hat', 'beard', 'lipstick', 'glasses', 'eyemakeup']) {
+    const o = M.RX_OCCLUDER_BY_ID[id];
+    assert.ok(o.cost < 0.02, `${id} should be free to route around (measured ${o.cost})`);
+    assert.ok(!o.costly, `${id} must not be marked costly`);
+  }
+  for (const id of ['foundation', 'contacts']) {
+    const o = M.RX_OCCLUDER_BY_ID[id];
+    assert.ok(o.costly, `${id} takes out colour and must be flagged as costly`);
+    assert.ok(o.cost >= 0.02);
+  }
+});
+
+test('every occluder blocks measurements that actually exist', () => {
+  const keys = new Set(M.RX_MEASURES.map((m) => m.key));
+  for (const o of M.RX_OCCLUDERS) {
+    assert.ok(o.blocks.length > 0, `${o.id} blocks nothing`);
+    for (const k of o.blocks) assert.ok(keys.has(k), `${o.id} blocks "${k}", which is not a measurement`);
+  }
+});
+
+test('ticking a costly box really does drop colour out of the comparison', () => {
+  const worn = M.rxOccluderBlocks(['foundation', 'contacts']);
+  const rounds = [R.rxRound(VA, [VA, VB], [worn, worn])];
+  const table = R.rxMergeRounds(rounds, 2);
+  const call = R.rxAllCalls(table, 2).find((c) => c.key === 'colour');
+  assert.equal(call.answered, false, 'colouring cannot be scored once skin and eyes are excluded');
+});

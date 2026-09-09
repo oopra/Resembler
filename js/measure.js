@@ -147,6 +147,62 @@ var RX_MEASURES = [
 var RX_MEASURE_BY_KEY = {};
 RX_MEASURES.forEach(function(m){ RX_MEASURE_BY_KEY[m.key] = m; });
 
+/* ---- things worn on a face, and what they cost to work around ----
+
+   You cannot remove a cap from a photograph. Anything that claims to is a model INVENTING a
+   forehead, and measuring an invention is how this app got into trouble before. What can be done is
+   route around it: leave out the measurements the thing corrupts, and say so.
+
+   Whether that is worth doing was measured, not assumed — on 849 real parent/child pairs, dropping
+   each group and re-scoring against an identical set of stranger pairs, with a paired bootstrap for
+   the confidence interval (see tools/README-calibration.md):
+
+     hat / hair over forehead   +0.001  [-0.001, +0.004]   free
+     beard                      +0.006  [+0.002, +0.010]   free (slightly better without it)
+     lipstick                   -0.006  [-0.011, +0.000]   free
+     eye make-up / glasses      -0.002  [-0.006, +0.002]   free
+     foundation (skin colour)   -0.027                     real cost
+     coloured contacts          -0.044                     real cost
+
+   So almost everything is free to leave out, which is why these are tick boxes rather than clever
+   detectors: a detector can be wrong, and a tick box that costs nothing cannot. The two that DO cost
+   something are colour, and the app says so out loud when you tick them, because losing colour is
+   losing the strongest family signal it has. */
+var RX_OCCLUDERS = [
+  { id:'glasses',    label:'Glasses',            blocks:['eye_width','eye_open','canthal_tilt'], cost:0.002 },
+  { id:'hat',        label:'Hat or fringe',      blocks:['third_up','face_h','face_wh','forehead_w'], cost:0 },
+  { id:'beard',      label:'Beard or stubble',   blocks:['bigonial','taper','chin_h','chin_w','gonial'], cost:0 },
+  { id:'lipstick',   label:'Lipstick',           blocks:['lip_upper','lip_lower','lip_balance','mouth_w'], cost:0.006 },
+  { id:'eyemakeup',  label:'Eye make-up',        blocks:['eye_width','eye_open','canthal_tilt'], cost:0.002 },
+  { id:'foundation', label:'Foundation',         blocks:['skin_L','skin_a','skin_b'], cost:0.027, costly:true },
+  { id:'contacts',   label:'Coloured lenses',    blocks:['eye_L','eye_a','eye_b'], cost:0.044, costly:true }
+];
+var RX_OCCLUDER_BY_ID = {};
+RX_OCCLUDERS.forEach(function(o){ RX_OCCLUDER_BY_ID[o.id] = o; });
+
+/* Ticked boxes → the measurements to leave out, in the same shape rxCompare expects for expressions,
+   so the two merge without either knowing about the other. */
+function rxOccluderBlocks(ids){
+  var out = {}, reasons = [];
+  (ids || []).forEach(function(id){
+    var o = RX_OCCLUDER_BY_ID[id];
+    if(!o) return;
+    reasons.push(o.id);
+    o.blocks.forEach(function(k){ out[k] = true; });
+  });
+  out.__worn = reasons;
+  return out;
+}
+/* Merge two block maps (one from expressions, one from what is worn). */
+function rxMergeBlocks(a, b){
+  var out = {}, k;
+  for(k in (a || {})) if(k.slice(0, 2) !== '__') out[k] = true;
+  for(k in (b || {})) if(k.slice(0, 2) !== '__') out[k] = true;
+  out.__reasons = ((a && a.__reasons) || []).concat((b && b.__reasons) || []);
+  out.__worn = ((a && a.__worn) || []).concat((b && b.__worn) || []);
+  return out;
+}
+
 /* Landmarks → the numbers. Returns null when the mesh cannot be put in the standard pose (which in
    practice means no iris was found, and nothing downstream should be attempted). */
 function rxMeasure(pts, w, h){
@@ -266,6 +322,8 @@ function rxPose(matrix){
 
 if(typeof module !== 'undefined' && module.exports){
   module.exports = { RX_P: RX_P, RX_MEASURES: RX_MEASURES, RX_MEASURE_BY_KEY: RX_MEASURE_BY_KEY,
+    RX_OCCLUDERS: RX_OCCLUDERS, RX_OCCLUDER_BY_ID: RX_OCCLUDER_BY_ID,
+    rxOccluderBlocks: rxOccluderBlocks, rxMergeBlocks: rxMergeBlocks,
     RX_EXPR_LEVEL: RX_EXPR_LEVEL, rxAlign: rxAlign, rxMeasure: rxMeasure, rxScore: rxScore,
     rxCompare: rxCompare, rxBlocked: rxBlocked, rxPose: rxPose };
 }

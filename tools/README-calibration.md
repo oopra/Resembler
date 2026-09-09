@@ -130,6 +130,37 @@ There is also no ground truth for "looks more like Dad" — kinship verification
 resemblance-ranking between two real parents is not. No dataset can settle it, because the label is
 somebody's opinion.
 
+## What it costs to work around a hat, a beard or make-up
+
+You cannot remove a cap from a photograph. Anything claiming to is a model inventing a forehead, and
+this app has already been burned once by measuring something a model invented. What it does instead
+is leave out the measurements the thing corrupts — and whether that is affordable was measured rather
+than assumed.
+
+Method: drop each group, re-score against an **identical** set of stranger pairs (an earlier run that
+re-drew the stranger pairing per condition produced differences that were pure sampling noise), and
+put a paired bootstrap confidence interval on the change.
+
+| left out | AUC | change | 95% CI | real? |
+| --- | --- | --- | --- | --- |
+| nothing (baseline) | 0.745 | | | |
+| hat / fringe → forehead measurements | 0.747 | +0.001 | [−0.001, +0.004] | no |
+| beard → jawline measurements | 0.751 | +0.006 | [+0.002, +0.010] | yes, a slight *gain* |
+| lipstick → lip measurements | 0.739 | −0.006 | [−0.011, +0.000] | no |
+| glasses / eye make-up → eye outline | 0.744 | −0.002 | [−0.006, +0.002] | no |
+| foundation → skin colour | 0.719 | −0.027 | | yes |
+| coloured lenses → eye colour | 0.701 | −0.044 | | yes |
+| all colour | 0.643 | −0.102 | [−0.120, −0.086] | yes |
+
+**Everything except colour is free to leave out.** That is why these are tick boxes rather than
+detectors: a detector can false-positive on a naturally red lip or a dark brow, while a tick box that
+costs nothing cannot hurt you. Only the two colour boxes carry a real price, and the app says so on
+the card when you tick one.
+
+Sunglasses remain the exception that is detected automatically and refused outright, because they
+break the iris line that every other measurement is scaled by — that is not a group to route around,
+it is the ruler.
+
 ## Reproducing
 
 The scripts live in the session that produced this, not in the repo, because they depend on a dataset
