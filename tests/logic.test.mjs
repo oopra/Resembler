@@ -646,3 +646,19 @@ test('rxEyeVisibility: a blurred eye is not mistaken for a lens', () => {
   assert.ok(v.eyeVsCheek > G.RX_EYE_VS_CHEEK_MIN, 'but the region is not dark like a lens');
   assert.equal(v.covered, false, 'so it is blurry, not covered');
 });
+
+/* ---------- the same person twice ---------- */
+
+test('rxSamePerson: the line sits between family and identity, where it was measured', () => {
+  // Measured through this pipeline: same person median cosine 0.600, parent/child 0.125 (95th 0.298),
+  // strangers 0.009 (95th 0.116). Three separated populations; the line goes in the upper gap.
+  assert.equal(R.rxSamePerson(0.60), true, 'a typical same-person pair');
+  assert.equal(R.rxSamePerson(R.RX_SAME_PERSON_COS), true, 'the threshold itself counts');
+  assert.equal(R.rxSamePerson(0.30), false, 'the 95th percentile of real parent/child must not trip it');
+  assert.equal(R.rxSamePerson(0.125), false, 'nor a typical parent and child');
+  assert.equal(R.rxSamePerson(0.009), false, 'nor two strangers');
+  assert.equal(R.rxSamePerson(null), false);
+  assert.equal(R.rxSamePerson(NaN), false);
+  assert.ok(R.RX_SAME_PERSON_COS > R.RX_EMB_HI,
+    'and it sits above the top of the family scale, which is why same-person used to clamp to 100');
+});

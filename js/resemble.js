@@ -37,6 +37,30 @@ var RX_EMB_WEIGHT = 0.6;      // blend: 60% recognition model, 40% measurements.
 var RX_EMB_LO = -0.1314;      // 1st and 99th percentile of the cosine between two aligned faces,
 var RX_EMB_HI = 0.3079;       // used to put the embedding on the same 0-100 scale as the geometry.
 
+/* ---- is this the same person twice? ----
+   The obvious sanity check — compare someone with themselves — produced "a genuine mix of Dad and
+   Mum" and two ordinary-looking likeness scores, because the 0-100 scale above tops out in FAMILY
+   territory and anything closer simply clamps to 100. The model underneath is a recognition model:
+   telling one person from another is the thing it is actually built for, and that answer was being
+   thrown away.
+
+   Measured on the standard LFW verification pairs through this exact pipeline, plus the KinFaceW
+   parent/child pairs for comparison:
+
+     same person       n=593   median cosine 0.600
+     parent and child  n=836   median cosine 0.125,  95th percentile 0.298
+     two strangers     n=587   median cosine 0.009,  95th percentile 0.116
+
+   Three separated populations. At 0.40 the line catches 92.9% of same-person pairs while wrongly
+   flagging 0.0% of strangers and 0.5% of real parent/child pairs. The scale itself is deliberately
+   NOT stretched to cover this: widening it to reach 0.6 would squash the whole family range into the
+   bottom third, and telling families apart is the app's actual job. Same-person is announced
+   separately instead. */
+var RX_SAME_PERSON_COS = 0.40;
+function rxSamePerson(cosine){
+  return typeof cosine === 'number' && isFinite(cosine) && cosine >= RX_SAME_PERSON_COS;
+}
+
 var RX_SCALES = {
   blend: {
     clear: 27, lean: 16,
@@ -340,7 +364,8 @@ if(typeof module !== 'undefined' && module.exports){
   module.exports = { RX_FEATURES: RX_FEATURES, RX_FEATURE_KEYS: RX_FEATURE_KEYS,
     RX_FEATURE_MARGIN: RX_FEATURE_MARGIN,
     RX_MIN_COVERAGE: RX_MIN_COVERAGE, RX_SCALES: RX_SCALES, RX_EMB_WEIGHT: RX_EMB_WEIGHT,
-    RX_EMB_LO: RX_EMB_LO, RX_EMB_HI: RX_EMB_HI, rxUseScale: rxUseScale, rxEmbLikeness: rxEmbLikeness,
+    RX_EMB_LO: RX_EMB_LO, RX_EMB_HI: RX_EMB_HI, RX_SAME_PERSON_COS: RX_SAME_PERSON_COS,
+    rxSamePerson: rxSamePerson, rxUseScale: rxUseScale, rxEmbLikeness: rxEmbLikeness,
     rxChanceOf: rxChanceOf,
     rxFeature: rxFeature, rxAttributed: rxAttributed,
     rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,

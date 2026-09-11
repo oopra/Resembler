@@ -464,16 +464,19 @@ async function rxRunComparison(){
 
     // One embedding likeness per person, against the child. Null when the model is unavailable, in
     // which case rxOverall falls back to the measurements and the geometry scale is already selected.
-    var embScores = null;
+    var embScores = null, sameAs = null;
     if(rxEmbeddingReady && childRead.vec){
-      embScores = keep.map(function(i){
-        return firstReads[i].vec ? rxEmbLikeness(rxCosine(childRead.vec, firstReads[i].vec)) : null;
+      var cosines = keep.map(function(i){
+        return firstReads[i].vec ? rxCosine(childRead.vec, firstReads[i].vec) : null;
       });
+      embScores = cosines.map(function(c){ return rxEmbLikeness(c); });
+      // Recognition, not resemblance: whether this is simply the same face twice.
+      sameAs = cosines.map(function(c){ return rxSamePerson(c); });
     }
 
     rxStatus('');
     rxShowResults({ people: people, names: names, prepared: prepared, childPrepared: childPrepared,
-                    embScores: embScores, embeddingUsed: !!embScores,
+                    embScores: embScores, embeddingUsed: !!embScores, sameAs: sameAs,
                     // The count reported is the number of readings that actually landed, not the
                     // number asked for: a re-crop the mesh could not read is skipped, and saying
                     // "3 readings" over 2 would be a small lie in the app's own provenance line.
@@ -558,6 +561,26 @@ function rxPct(v){ return typeof v === 'number' ? Math.round(v) : '–'; }
 function rxRenderVerdict(run, overall, verdict){
   var box = document.getElementById('verdict');
   var sub;
+
+  /* Same person before anything else: "takes after Mum" is nonsense if Mum IS the child, and so is
+     "a genuine mix" — which is what the app used to say when handed three photos of one toddler. */
+  var twins = (run.sameAs || []).map(function(v, i){ return v ? run.names[i] : null; }).filter(Boolean);
+  if(twins.length){
+    var childName = rxChild.name || 'the little one';
+    box.className = 'verdict v-same';
+    box.innerHTML = '<p class="v-lead"></p><p class="v-sub"></p>';
+    box.querySelector('.v-lead').textContent = twins.length === run.names.length && run.names.length > 1
+      ? 'These are all the same person'
+      : (twins.length === 1 ? twins[0] + ' and ' + childName + ' are the same person'
+                            : rxList(twins) + ' and ' + childName + ' are the same person');
+    box.querySelector('.v-sub').textContent =
+      'The face-recognition model puts ' + (twins.length === 1 ? 'this pair' : 'these') +
+      ' well past the line where two photographs are one person rather than two relatives — a level ' +
+      'reached by 0.5% of real parent-and-child pairs and by no unrelated pair at all in testing. ' +
+      'Comparing someone with themselves cannot tell you who they take after. ' +
+      'If they genuinely are different people, they are extraordinarily alike.';
+    return;
+  }
   if(verdict.confidence === 'only'){
     sub = 'Only one person had a photo, so there is nothing to weigh this against — a likeness of ' +
           rxPct(overall.raw[verdict.leader]) + '/100 means little on its own. Add someone else to compare with.';

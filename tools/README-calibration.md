@@ -216,6 +216,35 @@ own thresholds — using one's thresholds on the other would be the original mis
 The app selects the scale by whether the recognition model actually loaded, and says which it used in
 the line under the result.
 
+### Telling the same person from a relative
+
+The obvious sanity check — compare someone with themselves — was answered with "a genuine mix of Dad
+and Mum" and two ordinary likeness scores. The 0-100 scale tops out in *family* territory
+(cosine 0.31), so anything closer clamped to 100. The model underneath is a **recognition** model:
+distinguishing one person from another is precisely what it is built for, and that answer was being
+discarded.
+
+Measured through this exact pipeline, on the standard LFW verification pairs plus the KinFaceW pairs:
+
+| | n | median cosine | 95th percentile |
+| --- | --- | --- | --- |
+| same person | 593 | **0.600** | |
+| parent and child | 836 | 0.125 | 0.298 |
+| two strangers | 587 | 0.009 | 0.116 |
+
+Three separated populations. Choosing the line:
+
+| threshold | catches same-person | flags strangers | flags real parent/child |
+| --- | --- | --- | --- |
+| ≥ 0.35 | 97.1% | 0.0% | 1.6% |
+| **≥ 0.40** | **92.9%** | **0.0%** | **0.5%** |
+| ≥ 0.50 | 78.9% | 0.0% | 0.1% |
+
+0.40 is the shipped line. The 0-100 scale was deliberately *not* stretched to reach 0.6: that would
+squash the entire family range into its bottom third, and telling families apart is the app's actual
+job. Same-person is announced separately, above the verdict, and the resemblance verdict is
+suppressed — "takes after Mum" is meaningless if Mum is the child.
+
 ### What it does not fix
 
 The recognition model produces one number. It cannot say whose eyes a child has — that remains the

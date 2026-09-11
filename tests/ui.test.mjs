@@ -16,6 +16,13 @@ beforeEach(async () => { page = await newPage(browser, srv.url); });
 const A = fixture('portrait-a');
 const B = fixture('portrait-b');
 
+// Unit vectors with a chosen cosine to the reference, so a test can say "this is kin-like" (0.13,
+// the measured median for real parent/child) or "this is a stranger" (0.01) rather than only
+// "identical" or "orthogonal".
+const REF = [1, 0, 0, 0];
+const atCosine = (c) => [c, Math.sqrt(1 - c * c), 0, 0];
+const withEmb = (fx, emb) => ({ ...fx, pts: fx.pts.map((p) => p.slice()), emb });
+
 /* Replace the mesh with a queue of fixtures. The app reads the child first and then each person in
    order, once per reading, so a queue of [child, p0, p1] repeats cleanly across readings. */
 async function stubMesh(p, queue) {
@@ -30,6 +37,11 @@ async function stubMesh(p, queue) {
     // of 0.04. An earlier stub summed raw coordinates, so every face pointed the same way, every
     // cosine clamped to 100, and the blend had nothing left to contribute.
     window.rxEmbed = async function (canvas, pts) {
+      // A fixture may carry an explicit `emb` to pin the cosine at a chosen value — needed to
+      // exercise kin-level similarity (cosine ~0.1-0.3), which sits between "identical" and
+      // "unrelated" and cannot be reached by hashing landmarks.
+      const f = q.find((x) => x.pts === pts);
+      if (f && f.emb) return Float32Array.from(f.emb);
       let h = 2166136261;
       for (const pt of pts) {
         h ^= Math.round(pt[0] * 100000); h = Math.imul(h, 16777619);
@@ -140,9 +152,11 @@ test('no network request is made while comparing', async () => {
 
 /* ---------- the verdict ---------- */
 
-test('a child whose face IS one parent’s is called for that parent', async () => {
-  // Same landmarks and the same photo for the child and Mum; Dad is a different face.
-  await stubMesh(page, [A, A, B]);
+test('a child clearly closer to one parent is called for that parent', async () => {
+  // Kin-level for Mum (cosine 0.30, the 95th percentile of real parent/child) and stranger-level for
+  // Dad (0.01). Identical faces are no longer usable here — they now trip same-person detection,
+  // which is the point of that feature.
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.30)), withEmb(B, atCosine(0.01))]);
   await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
   await setPasses(page, 2);
   await runCompare(page);
@@ -154,14 +168,13 @@ test('a child whose face IS one parent’s is called for that parent', async () 
     stability: rxLastRun.verdict.stability
   }));
   assert.equal(r.lead, 'Takes after Mum');
-  assert.equal(r.raw[0], 100);
-  assert.ok(r.raw[1] < 90);
+  assert.ok(r.raw[0] > r.raw[1], 'and Mum scores higher than Dad');
   assert.equal(r.stability, 1);
-  assert.match(r.sub, /every reading agreed/);
+  assert.match(r.sub, /turns up between two unrelated people/, 'quoted against chance, never bare');
 });
 
-test('two identical candidates produce a dead heat, not an arbitrary winner', async () => {
-  await stubMesh(page, [A, A, A]);
+test('two equally-similar candidates produce a dead heat, not an arbitrary winner', async () => {
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.15)), withEmb(A, atCosine(0.15))]);
   await fillForm(page, ['Baby', 'Mum', 'Dad'], [2, 2, 2]);
   await setPasses(page, 1);
   await runCompare(page);
@@ -521,4 +534,51 @@ test('what someone was wearing is carried through into the result', async () => 
   // kept out of the overall entirely. Mum must not win the jaw by walkover because Dad has a beard.
   assert.equal(r.jaw.partial, true);
   assert.equal(r.jawAttributed, false, 'nobody is handed the jaw because the other one has a beard');
+});
+
+test('comparing someone with themselves says so, instead of calling it a family mix', async () => {
+  // The obvious sanity check, and the app used to answer "a genuine mix of Dad and Mum" when handed
+  // three photos of one child. Same landmarks everywhere means the stub embeds them identically,
+  // cosine 1, which is well past the same-person line.
+  await stubMesh(page, [A, A, A]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 1, 1]);
+  await setPasses(page, 1);
+  await runCompare(page);
+  const r = await page.evaluate(() => ({
+    lead: document.querySelector('.v-lead').textContent,
+    sub: document.querySelector('.v-sub').textContent,
+    cls: document.getElementById('verdict').className,
+    sameAs: rxLastRun.run.sameAs
+  }));
+  assert.deepEqual(r.sameAs, [true, true]);
+  assert.equal(r.lead, 'These are all the same person');
+  assert.match(r.sub, /cannot tell you who they take after/);
+  assert.match(r.cls, /v-same/);
+  assert.ok(!/genuine mix|Takes after|Leans towards/.test(r.lead), 'and never a resemblance verdict');
+});
+
+test('one candidate being the same person is named, the others are not accused', async () => {
+  await stubMesh(page, [A, A, B]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+  const r = await page.evaluate(() => ({
+    lead: document.querySelector('.v-lead').textContent,
+    sameAs: rxLastRun.run.sameAs
+  }));
+  assert.deepEqual(r.sameAs, [true, false]);
+  assert.equal(r.lead, 'Mum and Ada are the same person');
+});
+
+test('a normal family comparison is not accused of being one person', async () => {
+  await stubMesh(page, [A, B, B]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 2, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+  const r = await page.evaluate(() => ({
+    lead: document.querySelector('.v-lead').textContent,
+    sameAs: rxLastRun.run.sameAs
+  }));
+  assert.deepEqual(r.sameAs, [false, false]);
+  assert.ok(/genuine mix|Takes after|Leans towards/.test(r.lead), 'it still gives a resemblance verdict');
 });

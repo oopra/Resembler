@@ -155,6 +155,7 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 .verdict.v-lean{ border-color:var(--accent); }
 .verdict.v-mix{ border-color:var(--warn); }
 .verdict.v-only{ border-color:var(--muted); }
+.verdict.v-same{ border-color:var(--accent); }
 .v-lead{ margin:0; font-size:26px; line-height:1.2; font-family:ui-serif, Georgia, serif; font-weight:650; }
 .v-sub{ margin:6px 0 0; color:var(--muted); font-size:14px; }
 
