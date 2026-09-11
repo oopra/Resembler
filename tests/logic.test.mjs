@@ -662,3 +662,42 @@ test('rxSamePerson: the line sits between family and identity, where it was meas
   assert.ok(R.RX_SAME_PERSON_COS > R.RX_EMB_HI,
     'and it sits above the top of the family scale, which is why same-person used to clamp to 100');
 });
+
+test('rxIdentityGroup: a weak link is rescued by a strong one elsewhere in the group', () => {
+  // The reported case: child-vs-Dad was a hard pairing and fell under the line, but Dad and Mum
+  // were plainly the same face. 7.1% of genuine same-person pairs land below the threshold, so
+  // testing every pair instead of only each-against-the-child is worth about one catch in fourteen.
+  const child = 0, mum = 1, dad = 2;
+  const cos = [
+    [1.00, 0.62, 0.21],   // child–dad is weak
+    [0.62, 1.00, 0.71],   // but mum–dad is unmistakable
+    [0.21, 0.71, 1.00]
+  ];
+  assert.deepEqual(R.rxIdentityGroup(cos), [true, true, true],
+    'all three are one person, including the one the child could not be matched to directly');
+  assert.equal(R.rxSamePerson(cos[child][dad]), false, 'and the direct pairing really would have missed it');
+});
+
+test('rxIdentityGroup: a real family is not swept into one identity', () => {
+  const cos = [
+    [1.00, 0.13, 0.11],   // kin-level all round
+    [0.13, 1.00, 0.05],
+    [0.11, 0.05, 1.00]
+  ];
+  assert.deepEqual(R.rxIdentityGroup(cos), [true, false, false], 'only the child is in the child’s group');
+});
+
+test('rxIdentityGroup: a separate pair of twins does not drag in the child', () => {
+  // Two candidates who are the same person as each other, but not as the child.
+  const cos = [
+    [1.00, 0.10, 0.09],
+    [0.10, 1.00, 0.80],
+    [0.09, 0.80, 1.00]
+  ];
+  assert.deepEqual(R.rxIdentityGroup(cos), [true, false, false]);
+});
+
+test('rxIdentityGroup: missing embeddings are simply not linked', () => {
+  const cos = [[1.00, null], [null, 1.00]];
+  assert.deepEqual(R.rxIdentityGroup(cos), [true, false]);
+});

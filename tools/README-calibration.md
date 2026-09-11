@@ -240,6 +240,20 @@ Three separated populations. Choosing the line:
 | **≥ 0.40** | **92.9%** | **0.0%** | **0.5%** |
 | ≥ 0.50 | 78.9% | 0.0% | 0.1% |
 
+**Identity is transitive, and using that is worth about one catch in fourteen.** At 0.40, 7.1% of
+genuine same-person pairs still fall below the line — the hard ones: a big age gap, a profile, bad
+light, a toddler looking down. Comparing only each candidate against the child tests *n* pairs and
+misses those; comparing every pair and joining the links tests *n(n+1)/2*, so a weak edge is rescued
+by any strong edge elsewhere. Three photographs of one person are recognised as one person even when
+one of the three pairings is poor. This is the alternative to lowering the threshold, which would
+start accusing real parents and children instead.
+
+**And the rest of the page has to agree.** The first version of this replaced the headline and left
+the body printing a resemblance split and "Mum's eyes · Dad's nose" about a single child. Once
+identity is established the percentage split is dropped, the whose-eyes line is hidden, the feature
+table is folded away behind a label saying it now describes the difference between two photographs
+rather than a family resemblance, and the copy-as-text output says the same thing the screen does.
+
 0.40 is the shipped line. The 0-100 scale was deliberately *not* stretched to reach 0.6: that would
 squash the entire family range into its bottom third, and telling families apart is the app's actual
 job. Same-person is announced separately, above the verdict, and the resemblance verdict is

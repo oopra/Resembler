@@ -470,8 +470,15 @@ async function rxRunComparison(){
         return firstReads[i].vec ? rxCosine(childRead.vec, firstReads[i].vec) : null;
       });
       embScores = cosines.map(function(c){ return rxEmbLikeness(c); });
-      // Recognition, not resemblance: whether this is simply the same face twice.
-      sameAs = cosines.map(function(c){ return rxSamePerson(c); });
+
+      // Recognition rather than resemblance, over EVERY pair and not just each candidate against
+      // the child: identity is transitive, and a weak child-to-candidate pairing is rescued by a
+      // strong candidate-to-candidate one.
+      var vecs = [childRead.vec].concat(keep.map(function(i){ return firstReads[i].vec; }));
+      var matrix = vecs.map(function(a){
+        return vecs.map(function(b){ return (a && b) ? rxCosine(a, b) : null; });
+      });
+      sameAs = rxIdentityGroup(matrix).slice(1);
     }
 
     rxStatus('');
@@ -611,6 +618,7 @@ function rxRenderVerdict(run, overall, verdict){
 function rxRenderLineup(run, overall, verdict){
   var box = document.getElementById('lineup');
   box.innerHTML = '';
+  var identity = (run.sameAs || []).some(Boolean);
   var childWrap = document.createElement('div');
   childWrap.className = 'line-child';
   childWrap.innerHTML = '<img alt="The prepared crop of the child that was measured"><span class="line-name"></span>';
@@ -632,9 +640,18 @@ function rxRenderLineup(run, overall, verdict){
       '</div>';
     row.querySelector('img').src = run.prepared[i].dataUrl;
     row.querySelector('.line-name').textContent = name;
-    row.querySelector('.line-share').textContent = rxPct(overall.share[i]) + '%';
-    row.querySelector('.bar span').style.width = Math.max(2, rxPct(overall.share[i])) + '%';
-    row.querySelector('.line-raw').textContent = 'likeness ' + rxPct(overall.raw[i]) + '/100';
+    if(identity){
+      // A resemblance split between someone and themselves is not a number worth printing.
+      row.querySelector('.line-share').textContent = run.sameAs[i] ? 'same person' : '';
+      row.querySelector('.bar').remove();
+      row.querySelector('.line-raw').textContent = run.sameAs[i]
+        ? 'the same face as ' + (rxChild.name || 'the little one')
+        : 'a different person';
+    }else{
+      row.querySelector('.line-share').textContent = rxPct(overall.share[i]) + '%';
+      row.querySelector('.bar span').style.width = Math.max(2, rxPct(overall.share[i])) + '%';
+      row.querySelector('.line-raw').textContent = 'likeness ' + rxPct(overall.raw[i]) + '/100';
+    }
     rows.appendChild(row);
   });
   box.appendChild(rows);
@@ -642,7 +659,13 @@ function rxRenderLineup(run, overall, verdict){
   // Said on screen, not just in the README: the percentages compare these people with each other,
   // which is a real comparison. The 0–100 likeness is a ruler of the app's own devising — there is
   // no database of family noses behind it — so it is fine for "who is closer" and not a statistic.
-  if(run.names.length > 1){
+  if(identity){
+    var inote = document.createElement('p');
+    inote.className = 'lineup-note';
+    inote.textContent = 'No resemblance split is shown, because there is nothing to split: a person ' +
+      'cannot take after themselves. Use photographs of different people.';
+    box.appendChild(inote);
+  }else if(run.names.length > 1){
     var note = document.createElement('p');
     note.className = 'lineup-note';
     note.textContent = 'The percentages split the resemblance between these people — that is the ' +
@@ -654,6 +677,14 @@ function rxRenderLineup(run, overall, verdict){
 
 function rxRenderMix(run, calls){
   var box = document.getElementById('mixLine');
+  if((run.sameAs || []).some(Boolean)){
+    // "Mum's eyes, Dad's nose" about one child is the sort of nonsense this app is supposed to
+    // have stopped producing.
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
   var parts = [];
   run.names.forEach(function(name, i){
     var won = rxWonBy(calls, i);
@@ -671,13 +702,26 @@ function rxRenderMix(run, calls){
 function rxRenderFeatures(run, table, calls){
   var box = document.getElementById('featureTable');
   box.innerHTML = '';
-  if(run.embeddingUsed){
+  var identity = (run.sameAs || []).some(Boolean);
+  var host = box;
+  if(identity){
+    // Kept, because it is the evidence, but folded away and labelled for what it is.
+    var det = document.createElement('details');
+    det.className = 'fold';
+    det.innerHTML = '<summary>Show the feature measurements anyway</summary>' +
+      '<p class="ftable-note">These compare a face with itself, so they describe the difference ' +
+      'between two photographs — angle, light, expression, age — and not a family resemblance. ' +
+      'Nothing here should be read as one person taking after another.</p>';
+    box.appendChild(det);
+    host = det;
+  }
+  if(!identity && run.embeddingUsed){
     var note = document.createElement('p');
     note.className = 'ftable-note';
     note.textContent = 'The verdict above mostly comes from a face-recognition model, which produces ' +
       'a single number. The breakdown below is the measurements — it is where "whose eyes" comes from, ' +
       'and it can disagree with the headline.';
-    box.appendChild(note);
+    host.appendChild(note);
   }
   calls.forEach(function(call){
     var f = rxFeature(call.key);
@@ -719,7 +763,7 @@ function rxRenderFeatures(run, table, calls){
         row.appendChild(p);
       }
     }
-    box.appendChild(row);
+    host.appendChild(row);
   });
 }
 
@@ -781,6 +825,21 @@ function rxList(items){
 function rxResultText(){
   var L = rxLastRun;
   if(!L) return '';
+  // The copied text has to agree with the screen: if this turned out to be one person, copying a
+  // resemblance verdict out of it would put the nonsense back into circulation.
+  var twins = (L.run.sameAs || []).map(function(v, i){ return v ? L.run.names[i] : null; }).filter(Boolean);
+  if(twins.length){
+    return [
+      twins.length === L.run.names.length && L.run.names.length > 1
+        ? 'These are all the same person.'
+        : rxList(twins) + ' and ' + (rxChild.name || 'the little one') + ' are the same person.',
+      '',
+      'A face-recognition model put them past the line where two photographs are one person rather ' +
+      'than two relatives. No resemblance was scored: someone cannot take after themselves.',
+      '',
+      'Measured on-device. For fun only — not a paternity, DNA or identity test.'
+    ].join('\n');
+  }
   var lines = [rxHeadline(L.verdict, L.run.names), ''];
   L.run.names.forEach(function(name, i){
     lines.push(name + ': ' + rxPct(L.overall.share[i]) + '% of the resemblance (likeness ' +

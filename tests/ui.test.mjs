@@ -233,8 +233,9 @@ test('the result shows every feature, the crops that were measured, and where th
 test('features are attributed one at a time — her nose from one, his eyes from the other', async () => {
   // A child built from A's nose, B's eyes and a 50/50 blend of everything else, expressed as
   // landmarks so the whole pipeline does the work.
+  // Kin-level similarity, not an identical copy — a copy now (correctly) reads as the same person.
   const child = JSON.parse(JSON.stringify(A));
-  await stubMesh(page, [child, A, B]);
+  await stubMesh(page, [withEmb(child, REF), withEmb(A, atCosine(0.28)), withEmb(B, atCosine(0.05))]);
   await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
   await setPasses(page, 1);
   await runCompare(page);
@@ -320,7 +321,7 @@ test('comparing against one person says so instead of declaring a winner', async
 });
 
 test('the copied text matches what is on screen, disclaimer included', async () => {
-  await stubMesh(page, [A, A, B]);
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.30)), withEmb(B, atCosine(0.01))]);
   await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
   await setPasses(page, 1);
   await runCompare(page);
@@ -581,4 +582,70 @@ test('a normal family comparison is not accused of being one person', async () =
   }));
   assert.deepEqual(r.sameAs, [false, false]);
   assert.ok(/genuine mix|Takes after|Leans towards/.test(r.lead), 'it still gives a resemblance verdict');
+});
+
+test('once it is the same person, the resemblance breakdown stops pretending', async () => {
+  // The reported fault: the headline said "same person" while the body below still printed a
+  // resemblance split and "Mum's eyes · Dad's nose" about one child.
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.7)), withEmb(B, atCosine(0.6))]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+
+  const r = await page.evaluate(() => ({
+    lead: document.querySelector('.v-lead').textContent,
+    mixHidden: document.getElementById('mixLine').hidden,
+    shares: [...document.querySelectorAll('.line-share')].map((e) => e.textContent),
+    bars: document.querySelectorAll('.line-row .bar').length,
+    raws: [...document.querySelectorAll('.line-raw')].map((e) => e.textContent),
+    note: document.querySelector('.lineup-note').textContent,
+    folded: !!document.querySelector('.feature-table details.fold'),
+    featureRowsVisible: document.querySelectorAll('.feature-table > .frow').length
+  }));
+  assert.equal(r.lead, 'These are all the same person');
+  assert.equal(r.mixHidden, true, 'no "whose eyes" line');
+  assert.deepEqual(r.shares, ['same person', 'same person'], 'no percentage split');
+  assert.equal(r.bars, 0, 'and no bars to read a split off');
+  assert.ok(r.raws.every((t) => /same face as Ada/.test(t)));
+  assert.match(r.note, /a person cannot take after themselves/);
+  assert.equal(r.folded, true, 'the measurements are folded away, not deleted');
+  assert.equal(r.featureRowsVisible, 0, 'and not presented as a resemblance');
+
+  const text = await page.evaluate(() => rxResultText());
+  assert.match(text, /These are all the same person/);
+  assert.ok(!/Takes after|genuine mix|% of the resemblance/.test(text),
+    'the copied text must not put the nonsense back into circulation');
+});
+
+test('a transitive link catches the candidate the child alone would have missed', async () => {
+  // child–Dad is weak (0.21, under the line); Mum–Dad is unmistakable. All three are one person.
+  const child = [1, 0, 0, 0];
+  const mum = [0.62, Math.sqrt(1 - 0.62 ** 2), 0, 0];
+  // A vector close to mum but far from child.
+  const n = Math.sqrt(1 - 0.21 ** 2);
+  const dad = [0.21, (0.71 - 0.21 * 0.62) / Math.sqrt(1 - 0.62 ** 2), 0, 0];
+  dad[2] = Math.sqrt(Math.max(0, 1 - dad[0] ** 2 - dad[1] ** 2));
+  await stubMesh(page, [withEmb(A, child), withEmb(A, mum), withEmb(B, dad)]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+  const r = await page.evaluate(() => rxLastRun.run.sameAs);
+  assert.deepEqual(r, [true, true], 'Dad is caught through Mum, not directly');
+});
+
+test('a genuine family still gets the full breakdown', async () => {
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.28)), withEmb(B, atCosine(0.05))]);
+  await fillForm(page, ['Ada', 'Mum', 'Dad'], [1, 2, 3]);
+  await setPasses(page, 1);
+  await runCompare(page);
+  const r = await page.evaluate(() => ({
+    sameAs: rxLastRun.run.sameAs,
+    mixHidden: document.getElementById('mixLine').hidden,
+    bars: document.querySelectorAll('.line-row .bar').length,
+    rows: document.querySelectorAll('.feature-table > .frow').length
+  }));
+  assert.deepEqual(r.sameAs, [false, false]);
+  assert.equal(r.mixHidden, false);
+  assert.equal(r.bars, 2, 'the split is shown');
+  assert.equal(r.rows, 8, 'and all eight features are on display, not folded away');
 });

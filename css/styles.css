@@ -183,6 +183,9 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 .mix-line .shared{ color:var(--muted); font-size:13.5px; }
 
 .feature-table{ display:grid; gap:2px; }
+.fold{ border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+.fold summary{ cursor:pointer; font-size:13px; color:var(--muted); }
+.fold[open] summary{ margin-bottom:8px; }
 .ftable-note{ margin:0 0 8px; font-size:12px; line-height:1.55; color:var(--muted); }
 .frow{ padding:12px 0; border-top:1px solid var(--line); }
 .frow-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }

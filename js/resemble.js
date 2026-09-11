@@ -61,6 +61,31 @@ function rxSamePerson(cosine){
   return typeof cosine === 'number' && isFinite(cosine) && cosine >= RX_SAME_PERSON_COS;
 }
 
+/* Identity is transitive, and using that is worth about one catch in fourteen.
+   At this threshold 7.1% of genuine same-person pairs fall below it — the hard ones: a big age gap,
+   a profile, bad light, a toddler looking down. Comparing only each candidate against the CHILD
+   tests n pairs and misses those. Comparing every pair and joining the links tests n(n+1)/2, so one
+   weak edge is rescued by any strong edge elsewhere in the group: three photographs of one person
+   are recognised as one person even when one of the three pairings is a poor match.
+
+   Takes a full pairwise cosine matrix (index 0 is the child) and returns, for each face, whether it
+   ends up in the child's group. Plain union-find; no lowering of the threshold, which would start
+   accusing real parents and children instead. */
+function rxIdentityGroup(cos){
+  var n = cos.length, parent = [], i, j;
+  for(i = 0; i < n; i++) parent.push(i);
+  function find(x){ while(parent[x] !== x){ parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  function union(a, b){ a = find(a); b = find(b); if(a !== b) parent[b] = a; }
+  for(i = 0; i < n; i++){
+    for(j = i + 1; j < n; j++){
+      if(cos[i] && rxSamePerson(cos[i][j])) union(i, j);
+    }
+  }
+  var out = [];
+  for(i = 0; i < n; i++) out.push(find(i) === find(0));
+  return out;
+}
+
 var RX_SCALES = {
   blend: {
     clear: 27, lean: 16,
@@ -365,7 +390,8 @@ if(typeof module !== 'undefined' && module.exports){
     RX_FEATURE_MARGIN: RX_FEATURE_MARGIN,
     RX_MIN_COVERAGE: RX_MIN_COVERAGE, RX_SCALES: RX_SCALES, RX_EMB_WEIGHT: RX_EMB_WEIGHT,
     RX_EMB_LO: RX_EMB_LO, RX_EMB_HI: RX_EMB_HI, RX_SAME_PERSON_COS: RX_SAME_PERSON_COS,
-    rxSamePerson: rxSamePerson, rxUseScale: rxUseScale, rxEmbLikeness: rxEmbLikeness,
+    rxSamePerson: rxSamePerson, rxIdentityGroup: rxIdentityGroup, rxUseScale: rxUseScale,
+    rxEmbLikeness: rxEmbLikeness,
     rxChanceOf: rxChanceOf,
     rxFeature: rxFeature, rxAttributed: rxAttributed,
     rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,

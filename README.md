@@ -129,7 +129,11 @@ about the cases where an answer should not be given:
   standard LFW pairs, same-person photographs sit at a median cosine of 0.600 against 0.125 for real
   parent-and-child and 0.009 for strangers. Above 0.40 — which catches 93% of same-person pairs while
   flagging 0.5% of real parent/child and no strangers at all — the app says so and drops the
-  resemblance verdict, because "takes after Mum" means nothing if Mum is the child.
+  resemblance verdict, because "takes after Mum" means nothing if Mum is the child. Every pair is
+  tested, not just each candidate against the child, because identity is transitive: 7% of genuine
+  same-person pairs fall below the line, and a weak pairing is rescued by a strong one elsewhere in
+  the group. When identity is established the whole resemblance output goes with the verdict — no
+  split, no "whose eyes", and the feature table folded away and relabelled.
 - **Every photo gets its own verdict before you press Compare** — *Good to compare*, *usable with
   some measurements left out*, *usable but weakened*, or *cannot be compared* — with the reason
   spelled out. Finding out at the end that one photo was unreadable is finding out too late.
