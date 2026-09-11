@@ -86,11 +86,12 @@ function rxBuildCard(card, index){
       card.worn = Array.prototype.filter.call(card.els.worn.querySelectorAll('input'), function(b){ return b.checked; })
                        .map(function(b){ return b.value; });
       rxShowWarnings(card);
+      rxRememberCard(card);
     });
   });
   if(card.name) card.els.name.value = card.name;
 
-  card.els.name.addEventListener('input', function(){ card.name = card.els.name.value.trim(); });
+  card.els.name.addEventListener('input', function(){ card.name = card.els.name.value.trim(); rxRememberCard(card); });
   card.els.file.addEventListener('change', function(){
     var f = card.els.file.files && card.els.file.files[0];
     if(f) rxLoadPhoto(card, f);
@@ -188,6 +189,7 @@ async function rxLoadPhoto(card, file){
   rxStatus('');
   try{
     card.src = await rxDecode(file);
+    card.storeBlob = null;                        // a new picture: the kept copy is stale
     card.dims = rxDims(card.src);
     card.frame = rxDefaultFrame(card.dims.w, card.dims.h);
     card.els.empty.hidden = true;
@@ -257,6 +259,24 @@ async function rxAutoFrameCard(card, quiet){
   rxPreview(card);
 }
 
+/* Saving is debounced because the frame changes on every animation frame of a drag, and writing a
+   photograph to storage sixty times a second would be absurd. */
+function rxRememberCard(card){
+  if(!rxRememberOn() || !card.src) return;
+  clearTimeout(card.saveTimer);
+  card.saveTimer = setTimeout(async function(){
+    try{
+      if(!card.storeBlob) card.storeBlob = await rxShrinkForStore(card.src);
+      await rxRememberPut({
+        id: card.kind === 'child' ? 'child' : 'person-' + rxPeople.indexOf(card),
+        kind: card.kind, slot: rxPeople.indexOf(card), name: card.name || '',
+        blob: card.storeBlob, frame: card.frame, worn: (card.worn || []).slice(), savedAt: Date.now()
+      });
+      rxRememberStatus();
+    }catch(e){ /* storage full, private mode, evicted: the app still works, it just forgets */ }
+  }, 400);
+}
+
 function rxPreview(card){
   if(card.raf) return;
   card.raf = requestAnimationFrame(function(){
@@ -266,6 +286,7 @@ function rxPreview(card){
     card.els.canvas.getContext('2d').drawImage(out.canvas, 0, 0);
     card.quality = out.quality;
     rxShowWarnings(card);
+    rxRememberCard(card);
   });
 }
 
@@ -926,6 +947,71 @@ function rxInstall(){
   rxInstallPrompt.userChoice.then(function(){ rxInstallPrompt = null; rxInstallUI(); });
 }
 
+async function rxRestore(){
+  if(!rxRememberOn()) return;
+  var saved;
+  try{ saved = await rxRememberAll(); }catch(e){ return; }
+  if(!saved.length) return;
+  // Make sure there are enough person cards for what was saved before filling any of them in.
+  var wanted = saved.filter(function(r){ return r.kind === 'person'; }).length;
+  while(rxPeople.length < wanted) rxAddPerson();
+  for(var i = 0; i < saved.length; i++){
+    var rec = saved[i];
+    var card = rec.kind === 'child' ? rxChild : rxPeople[rec.slot];
+    if(!card || !rec.blob) continue;
+    try{
+      card.src = await rxDecode(rec.blob);
+      card.dims = rxDims(card.src);
+      card.frame = rec.frame ? rxClampFrame(rec.frame, card.dims.w, card.dims.h)
+                             : rxDefaultFrame(card.dims.w, card.dims.h);
+      card.storeBlob = rec.blob;                 // already the right size; do not re-encode
+      card.name = rec.name || '';
+      card.els.name.value = card.name;
+      (rec.worn || []).forEach(function(id){
+        var box = card.els.worn.querySelector('input[value="' + id + '"]');
+        if(box){ box.checked = true; }
+      });
+      card.worn = (rec.worn || []).slice();
+      card.els.empty.hidden = true;
+      card.els.tools.hidden = false;
+      card.els.frame.classList.add('has-photo');
+      rxSyncZoom(card);
+      rxPreview(card);
+    }catch(e){ /* a record that will not decode is simply skipped */ }
+  }
+  rxRefreshCompare();
+  rxStatus('Your photos were restored from this device. Nothing was uploaded.', 'note');
+}
+
+async function rxRememberStatus(){
+  var box = document.getElementById('rememberBox');
+  var hint = document.getElementById('rememberHint');
+  var forget = document.getElementById('forgetBtn');
+  var on = rxRememberOn();
+  box.checked = on;
+  var n = on ? await rxRememberCount() : 0;
+  forget.hidden = !n;
+  hint.className = 'hint remember-hint' + (on ? ' on' : '');
+  hint.textContent = on
+    ? (n ? 'On. ' + n + ' photo' + (n === 1 ? '' : 's') + ' kept in this browser, on this device only — ' +
+           'never uploaded, and gone the moment you switch this off or press Forget.'
+         : 'On. Photos you add will be kept in this browser, on this device only. Never uploaded.')
+    : 'Off. Nothing is kept — you pick the photos again each time.';
+}
+
+async function rxToggleRemember(){
+  var on = document.getElementById('rememberBox').checked;
+  rxSetRemember(on);
+  if(on){
+    // Save whatever is already on screen, so ticking the box does something visible immediately.
+    [rxChild].concat(rxPeople).forEach(function(c){ if(c.src) rxRememberCard(c); });
+  }else{
+    // Off has to mean erased, not merely "stop adding".
+    try{ await rxForgetAll(); }catch(e){ /* nothing to erase */ }
+  }
+  setTimeout(rxRememberStatus, 500);
+}
+
 function rxInit(){
   rxChild = rxNewCard('child', '');
   document.getElementById('childSlots').appendChild(rxBuildCard(rxChild, 0));
@@ -938,6 +1024,14 @@ function rxInit(){
     document.querySelector('.masthead').scrollIntoView({ behavior: 'smooth' });
   });
   document.getElementById('copyBtn').addEventListener('click', rxCopyResult);
+  document.getElementById('rememberBox').addEventListener('change', rxToggleRemember);
+  document.getElementById('forgetBtn').addEventListener('click', async function(){
+    try{ await rxForgetAll(); }catch(e){ /* already gone */ }
+    rxRememberStatus();
+    rxStatus('The saved photos have been erased from this device.', 'note');
+  });
+  rxRememberStatus();
+  rxRestore();
   document.getElementById('installBtn').addEventListener('click', rxInstall);
   rxInstallUI();
   rxRefreshCompare();

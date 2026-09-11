@@ -214,6 +214,25 @@ ship inside the package, so there is no first-run download at all. That needs Xc
 and Android Studio for Android, plus the respective developer accounts, and it is not set up in this
 repo. Nothing about the app blocks it.
 
+## Remembering the photos
+
+Off by default, and that is not a formality: everywhere else this app says your photographs are not
+stored, and this is the one feature that changes that sentence.
+
+Switched on, a downscaled copy of each picture (long side 1600px — far more than the 448px the
+measuring uses) is kept in this browser's IndexedDB along with the crop you framed, the name you
+typed and the tick boxes you set, so a return visit starts where you left off instead of hunting
+through the camera roll again.
+
+What does not change: nothing is uploaded, nothing is shared, and no other site can read it — browser
+storage is walled off per origin. The photographs are already in the device's camera roll; this is a
+second copy in the same place, not a new exposure. The real risk is the ordinary one: **anyone who
+can unlock the device and open the app will see them.**
+
+Switching the setting off **erases** what was kept — it does not merely stop adding — and there is a
+Forget button that erases without switching off. On iPhones, Safari clears this kind of storage for
+sites left unopened for about a week, unless the app is installed to the home screen.
+
 ## Running it
 
 ```bash

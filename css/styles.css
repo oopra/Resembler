@@ -141,6 +141,11 @@ button:focus-visible, .frame:focus-visible, input:focus-visible{ outline:2px sol
 
 /* The one honest wait in the app: the first download of the mesh. Shown as a bar with a size on it
    rather than a spinner, because a silent sixteen megabytes reads as a hang. */
+.remember{ border:1px solid var(--line); border-radius:10px; padding:8px 12px 12px; margin:0 0 12px; }
+.remember legend{ font-size:12.5px; color:var(--muted); padding:0 6px; }
+.remember .chip{ font-size:13.5px; }
+.remember-hint{ margin:8px 0 0 !important; font-size:12px !important; }
+.remember-hint.on{ color:var(--ok); }
 .progress{ margin:12px 0 0; height:6px; border-radius:99px; background:var(--panel-2);
   border:1px solid var(--line); overflow:hidden; }
 .progress span{ display:block; height:100%; width:0; background:var(--accent); border-radius:99px;

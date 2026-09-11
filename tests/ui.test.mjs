@@ -649,3 +649,125 @@ test('a genuine family still gets the full breakdown', async () => {
   assert.equal(r.bars, 2, 'the split is shown');
   assert.equal(r.rows, 8, 'and all eight features are on display, not folded away');
 });
+
+/* ---------- remembering the photos, only if asked ---------- */
+
+test('off by default: nothing is written to storage', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  const r = await page.evaluate(async () => {
+    const dbs = (await indexedDB.databases?.()) || [];
+    return {
+      boxChecked: document.getElementById('rememberBox').checked,
+      hint: document.getElementById('rememberHint').textContent,
+      forgetHidden: document.getElementById('forgetBtn').hidden,
+      flag: localStorage.getItem('rx.remember'),
+      stored: await (async () => { try { return (await rxRememberAll()).length; } catch (e) { return 0; } })()
+    };
+  });
+  assert.equal(r.boxChecked, false);
+  assert.match(r.hint, /^Off\. Nothing is kept/);
+  assert.equal(r.forgetHidden, true);
+  assert.equal(r.stored, 0, 'a photo was added and nothing was kept');
+});
+
+test('switching it on saves what is already on screen, and says how much', async () => {
+  await stubMesh(page, [A, A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await addPhoto(page, '#peopleSlots .card:nth-child(1) .file', 2);
+  await page.check('#rememberBox');
+  await page.waitForFunction(() => /^On\. 2 photos/.test(document.getElementById('rememberHint').textContent),
+    null, { timeout: 10000 });
+  const r = await page.evaluate(async () => {
+    const all = await rxRememberAll();
+    return {
+      n: all.length,
+      ids: all.map((x) => x.id).sort(),
+      hasBlob: all.every((x) => x.blob instanceof Blob && x.blob.size > 0),
+      hasFrame: all.every((x) => x.frame && typeof x.frame.size === 'number'),
+      hint: document.getElementById('rememberHint').textContent,
+      forgetVisible: !document.getElementById('forgetBtn').hidden
+    };
+  });
+  assert.equal(r.n, 2);
+  assert.deepEqual(r.ids, ['child', 'person-0']);
+  assert.ok(r.hasBlob, 'the picture itself is kept');
+  assert.ok(r.hasFrame, 'and the crop, so it does not need re-framing');
+  assert.match(r.hint, /never uploaded/);
+  assert.equal(r.forgetVisible, true);
+});
+
+test('the photos, names, crops and tick boxes all come back on the next visit', async () => {
+  await stubMesh(page, [A, A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await addPhoto(page, '#peopleSlots .card:nth-child(1) .file', 2);
+  await page.fill('#childSlots .name-in', 'Ada');
+  await page.fill('#peopleSlots .card:nth-child(1) .name-in', 'Mum');
+  await page.check('#rememberBox');
+  await page.check('#peopleSlots .card:nth-child(1) .worn input[value="hat"]');
+  await page.evaluate(() => rxZoomTo(rxChild, 80));
+  await page.waitForFunction(() => /^On\. 2 photos/.test(document.getElementById('rememberHint').textContent),
+    null, { timeout: 10000 });
+  const before = await page.evaluate(() => Math.round(rxChild.frame.size));
+
+  // A fresh visit: reload the page. Storage survives, the page state does not — which is exactly
+  // the thing under test. No mesh stub is reinstated, because restoring does not need one.
+  await page.goto(srv.url + '/index.html', { waitUntil: 'domcontentloaded' });
+  // Records restore in key order, child first, so waiting only for the child races the parent.
+  await page.waitForFunction(() => window.rxChild && rxChild.src && rxPeople[0] && rxPeople[0].src,
+    null, { timeout: 20000 });
+  const r = await page.evaluate(() => ({
+    childName: document.querySelector('#childSlots .name-in').value,
+    mumName: document.querySelector('#peopleSlots .card:nth-child(1) .name-in').value,
+    childSize: Math.round(rxChild.frame.size),
+    hatTicked: document.querySelector('#peopleSlots .card:nth-child(1) .worn input[value="hat"]').checked,
+    worn: rxPeople[0].worn,
+    compareEnabled: !document.getElementById('compareBtn').disabled,
+    status: document.getElementById('status').textContent
+  }));
+  assert.equal(r.childName, 'Ada');
+  assert.equal(r.mumName, 'Mum');
+  assert.equal(r.childSize, before, 'the crop is exactly where it was left');
+  assert.equal(r.hatTicked, true);
+  assert.deepEqual(r.worn, ['hat']);
+  assert.equal(r.compareEnabled, true, 'and it is ready to compare straight away');
+  assert.match(r.status, /restored from this device\. Nothing was uploaded/);
+});
+
+test('switching it off erases, rather than merely stopping', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.check('#rememberBox');
+  await page.waitForFunction(() => /^On\. 1 photo/.test(document.getElementById('rememberHint').textContent),
+    null, { timeout: 10000 });
+  await page.uncheck('#rememberBox');
+  await page.waitForFunction(() => /^Off\./.test(document.getElementById('rememberHint').textContent),
+    null, { timeout: 10000 });
+  const left = await page.evaluate(async () => (await rxRememberAll()).length);
+  assert.equal(left, 0, 'turning it off has to mean the photographs are gone');
+});
+
+test('Forget erases without turning the setting off', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.check('#rememberBox');
+  await page.waitForFunction(() => !document.getElementById('forgetBtn').hidden, null, { timeout: 10000 });
+  await page.click('#forgetBtn');
+  await page.waitForFunction(() => document.getElementById('forgetBtn').hidden, null, { timeout: 10000 });
+  const r = await page.evaluate(async () => ({
+    stored: (await rxRememberAll()).length,
+    stillOn: document.getElementById('rememberBox').checked,
+    status: document.getElementById('status').textContent
+  }));
+  assert.equal(r.stored, 0);
+  assert.equal(r.stillOn, true, 'the setting stays on, ready for the next photos');
+  assert.match(r.status, /erased from this device/);
+});
+
+test('the page states plainly what is kept and what is not', async () => {
+  const footer = await page.textContent('.footnote');
+  assert.match(footer, /By default nothing is saved/);
+  assert.match(footer, /still never uploaded/);
+  assert.match(footer, /Anyone who can unlock this device/);
+  assert.match(footer, /Safari clears storage/);
+});

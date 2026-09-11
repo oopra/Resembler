@@ -52,6 +52,12 @@
       <label><input type="radio" name="passes" value="3"> <span><strong>Careful</strong><em>three readings</em></span></label>
     </fieldset>
     <p class="hint">Each reading measures the same faces from a slightly different crop. Finding a face is never pixel-perfect, so anything that shifts between readings is measurement noise — and where that noise is bigger than the difference between people, the result says so instead of picking a winner.</p>
+    <fieldset class="remember">
+      <legend>Between visits</legend>
+      <label class="chip"><input type="checkbox" id="rememberBox"><span>Remember these photos on this device</span></label>
+      <p class="hint remember-hint" id="rememberHint">Off. Nothing is kept — you pick the photos again each time.</p>
+      <button type="button" id="forgetBtn" class="tiny" hidden>Forget the saved photos</button>
+    </fieldset>
     <button type="button" id="compareBtn" class="primary" disabled>Compare faces</button>
     <div class="progress" id="progress" hidden><span></span></div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
@@ -79,13 +85,15 @@
   <p><strong>For fun, and only for fun.</strong> This measures what two faces look like in two photographs. It is not a paternity test, not a DNA test and not face recognition — it cannot tell you who is related to whom, and a different pair of photos of the same two people can give a different answer. Children also change enormously as they grow; the toddler who is “all Dad” is frequently a teenager who is all Mum.</p>
   <p><strong>How it works.</strong> A face-mesh model runs in this page and marks 478 points on each face. Those become about thirty measurements — the gap between the eyes, the width of the nose against its length, the angle of the jaw, the balance of the lips — each taken relative to the distance between the pupils, so distance from the camera and the difference between a child’s head and an adult’s largely cancel out. Similar measurements score high; the scores are grouped into features and weighted towards bone structure, which is what survives twenty years of growing.</p>
   <p><strong>What it will not measure.</strong> Ears and hairline: a face mesh stops at the face, so those are left out rather than guessed at. Anything an expression moves — a smile widening the mouth, a raised brow — is dropped from the comparison when either photo is pulling that face, and the result tells you it was dropped. A face turned or tipped away from the camera is flagged rather than measured, because turning a head foreshortens one side of everything.</p>
-  <p><strong>Where your photos go: nowhere.</strong> Everything happens in this page. Nothing is uploaded, nothing is stored, and there is no server to store it on — the model and its runtime are files served alongside this page, about 16 MB the first time, cached afterwards so it works with the network off.</p>
+  <p><strong>Where your photos go: nowhere.</strong> Everything happens in this page. Nothing is uploaded and there is no server to upload it to — the models and their runtime are files served alongside this page, about 41 MB the first time, cached afterwards so it works with the network off.</p>
+  <p><strong>Keeping them, only if you ask.</strong> By default nothing is saved and you pick the photos again each visit. Switch on “Remember these photos on this device” and a downscaled copy of each one is kept in this browser’s own storage — still never uploaded, still readable by no other site, and erased entirely by the Forget button or by switching the setting off. The photographs are already in this device’s camera roll; this is a second copy in the same place. Anyone who can unlock this device and open the app will see them. On iPhones, Safari clears storage for sites left unopened for about a week unless the app is installed to the home screen.</p>
 </footer>
 
 <script src="js/faces.js"></script>     <!-- decode · frame · level · normalise · quality-check -->
 <script src="js/measure.js"></script>   <!-- landmarks → ~30 measurements → a score per feature -->
 <script src="js/mesh.js"></script>      <!-- loads and runs the face mesh; reads skin and eye colour -->
 <script src="js/embed.js"></script>     <!-- face-recognition embedding (ArcFace/MobileFaceNet, on-device) -->
+<script src="js/remember.js"></script>  <!-- optional, off by default: keep the photos in this browser -->
 <script src="js/resemble.js"></script>  <!-- rolls measurements into features, and into a verdict -->
 <script src="js/app.js"></script>       <!-- the page: cards, dragging, the run, the results -->
 </body>
