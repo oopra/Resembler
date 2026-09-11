@@ -232,12 +232,16 @@ function rxSampleColours(canvas, pts){
    lenses, measured here as 0.13–0.16 of an eye-gap out of position. A ruler that wrong does not
    merely spoil the eyes row; it quietly bends the nose, the jaw and the face shape too.
 
-   Two signals, either of which is enough. Bare eyes have a bright sclera beside a dark iris; a lens
-   has no such edge. And an eye region far darker than the cheek beside it is a lens, not an eye.
-   Measured on real photographs: contrast 0.37 and 0.85 with eyes visible, 0.00 behind lenses;
-   eye-vs-cheek 1.06 and 0.78 visible, 0.19 and 0.10 behind lenses. The thresholds sit in the gap,
-   nearer the lens end, because wrongly rejecting a good photo is a nuisance and wrongly accepting a
-   covered one is a wrong answer presented confidently. */
+   Two signals, and BOTH must fail. Bare eyes have a bright sclera beside a dark iris; a lens has no
+   such edge. And an eye region far darker than the cheek beside it is a lens, not an eye. Measured
+   on real photographs: contrast 0.37 and 0.85 with eyes visible, 0.00 behind lenses; eye-vs-cheek
+   1.06 and 0.78 visible, 0.19 and 0.10 behind lenses — so a lens fails both at once.
+
+   It was originally either-signal-is-enough, which read soft and low-resolution faces as sunglasses
+   and refused them: benchmarking the shipped pipeline on 64px crops, that rejected about 40% of
+   perfectly ordinary photographs. A blurred eye loses its sclera edge but stays as bright as the
+   cheek around it, so requiring both keeps every real pair of lenses and stops punishing a grainy
+   snapshot. */
 var RX_EYE_CONTRAST_MIN = 0.10;   // sclera-vs-iris edge; bare eyes measured 0.37+
 var RX_EYE_VS_CHEEK_MIN = 0.35;   // eye region against the cheek; bare eyes measured 0.78+
 
@@ -280,7 +284,7 @@ function rxEyeVisibility(canvas, pts){
   return {
     contrast: contrast,
     eyeVsCheek: eyeVsCheek,
-    covered: contrast < RX_EYE_CONTRAST_MIN || eyeVsCheek < RX_EYE_VS_CHEEK_MIN
+    covered: contrast < RX_EYE_CONTRAST_MIN && eyeVsCheek < RX_EYE_VS_CHEEK_MIN
   };
 }
 

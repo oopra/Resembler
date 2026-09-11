@@ -485,13 +485,67 @@ test('rxChanceOf: a verdict is quoted against how often chance produces the same
   assert.equal(R.rxChanceOf(40), 1, 'a huge gap is rare by chance, never impossible');
 });
 
-test('the thresholds sit above the measured noise, not below it', () => {
+test('both rulers have thresholds above their own measured noise', () => {
   // The first version called a 10-point gap a "clear lead". Chance alone produces gaps that big
-  // 27% of the time, which is how a father was confidently told the wrong thing.
-  const chanceAt = (g) => R.rxChanceOf(g);
-  assert.ok(chanceAt(R.RX_CLEAR_GAP) <= 5, `"takes after" at ${R.RX_CLEAR_GAP} points must beat 95% of chance gaps`);
-  assert.ok(chanceAt(R.RX_LEAN_GAP) <= 25, `"leans" at ${R.RX_LEAN_GAP} points must beat 75% of chance gaps`);
-  assert.ok(R.RX_CLEAR_GAP > R.RX_LEAN_GAP);
+  // 27% of the time, which is how a father was confidently told the wrong thing. There are now two
+  // scales — blend and geometry-only — and each must clear ITS OWN null, not the other's.
+  for (const name of ['blend', 'geometry']) {
+    const sc = R.rxUseScale(name);
+    assert.ok(R.rxChanceOf(sc.clear) <= 5, `${name}: "takes after" at ${sc.clear} must beat 95% of chance gaps`);
+    assert.ok(R.rxChanceOf(sc.lean) <= 25, `${name}: "leans" at ${sc.lean} must beat 75% of chance gaps`);
+    assert.ok(sc.clear > sc.lean, `${name}: clear must be a higher bar than lean`);
+  }
+  assert.ok(R.RX_SCALES.blend.clear > R.RX_SCALES.geometry.clear,
+    'the blended score is noisier in absolute points, so its bar is higher');
+  R.rxUseScale('geometry');
+});
+
+test('rxEmbLikeness: a cosine lands on the same 0-100 ruler as the measurements', () => {
+  assert.equal(R.rxEmbLikeness(R.RX_EMB_LO), 0);
+  assert.equal(Math.round(R.rxEmbLikeness(R.RX_EMB_HI)), 100);
+  assert.ok(R.rxEmbLikeness(-5) === 0 && R.rxEmbLikeness(5) === 100, 'clamped at both ends');
+  assert.equal(R.rxEmbLikeness(null), null);
+  assert.equal(R.rxEmbLikeness(NaN), null);
+});
+
+test('rxOverall: the blend is 60% model and 40% measurements, and says so in its own output', () => {
+  const table = R.rxMergeRounds([R.rxRound(VA, [VA, VB], null)], 2);
+  const geoOnly = R.rxOverall(table, 2);
+  const blended = R.rxOverall(table, 2, [20, 90]);
+  assert.equal(blended.geometry[0], geoOnly.raw[0], 'the measurement score is kept alongside');
+  assert.ok(Math.abs(blended.raw[0] - (0.6 * 20 + 0.4 * geoOnly.raw[0])) < 1e-9);
+  assert.ok(Math.abs(blended.raw[1] - (0.6 * 90 + 0.4 * geoOnly.raw[1])) < 1e-9);
+  assert.ok(blended.raw[1] > blended.raw[0], 'the model can outvote the measurements, which is the point');
+});
+
+test('rxOverall: a face the measurements failed on still scores from the model alone', () => {
+  const empty = {};
+  const table = R.rxMergeRounds([R.rxRound(VA, [empty], null)], 1);
+  assert.equal(R.rxOverall(table, 1).raw[0], null, 'no measurements, no geometry score');
+  assert.equal(R.rxOverall(table, 1, [72]).raw[0], 72, 'but the model still has an opinion');
+});
+
+test('rxSimilarity: recovers a known rotation, scale and shift exactly', () => {
+  const Emb = require('../js/embed.js');
+  const k = 1.7, th = 0.3, tx = 12, ty = -5;
+  const src = [[0, 0], [10, 0], [5, 8], [2, 12], [9, 11]];
+  const dst = src.map(([x, y]) => [k * (x * Math.cos(th) - y * Math.sin(th)) + tx,
+                                   k * (x * Math.sin(th) + y * Math.cos(th)) + ty]);
+  const m = Emb.rxSimilarity(src, dst);
+  for (const [x, y] of src) {
+    const px = m.a * x + m.c * y + m.e, py = m.b * x + m.d * y + m.f;
+    const [ex, ey] = dst[src.findIndex(([a, b]) => a === x && b === y)];
+    assert.ok(Math.abs(px - ex) < 1e-6 && Math.abs(py - ey) < 1e-6);
+  }
+  assert.ok(Math.abs(Math.hypot(m.a, m.b) - k) < 1e-9, 'and the scale it found is the scale applied');
+});
+
+test('rxCosine: unit vectors, and a refusal to compare mismatched ones', () => {
+  const Emb = require('../js/embed.js');
+  assert.ok(Math.abs(Emb.rxCosine([1, 0, 0], [1, 0, 0]) - 1) < 1e-9);
+  assert.ok(Math.abs(Emb.rxCosine([1, 0, 0], [0, 1, 0])) < 1e-9);
+  assert.equal(Emb.rxCosine([1, 0], [1, 0, 0]), null);
+  assert.equal(Emb.rxCosine(null, [1]), null);
 });
 
 test('weights come from measured kin signal, not from what sounded plausible', () => {
@@ -572,4 +626,23 @@ test('ticking a costly box really does drop colour out of the comparison', () =>
   const table = R.rxMergeRounds(rounds, 2);
   const call = R.rxAllCalls(table, 2).find((c) => c.key === 'colour');
   assert.equal(call.answered, false, 'colouring cannot be scored once skin and eyes are excluded');
+});
+
+test('rxEyeVisibility: a blurred eye is not mistaken for a lens', () => {
+  // A soft photo loses the sclera-to-iris edge but the eye stays about as bright as the cheek.
+  // Treating either signal alone as proof rejected ~40% of ordinary photographs in benchmarking.
+  const G = require('../js/mesh.js');
+  const W = 200, H = 200, data = new Uint8ClampedArray(W * H * 4);
+  const put = (x, y, v) => { const i = ((y | 0) * W + (x | 0)) * 4; data[i] = data[i + 1] = data[i + 2] = v; data[i + 3] = 255; };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) put(x, y, 150);
+  for (const [cx, cy] of [[70, 100], [130, 100]]) {
+    for (let y = cy - 14; y <= cy + 14; y++) for (let x = cx - 22; x <= cx + 22; x++) {
+      if ((x - cx) ** 2 / 484 + (y - cy) ** 2 / 196 > 1) continue;
+      put(x, y, 146);                                   // smeared: no iris edge, but not dark
+    }
+  }
+  const v = G.rxEyeVisibility({ width: W, height: H, getContext: () => ({ getImageData: () => ({ data }) }) }, eyePts);
+  assert.ok(v.contrast < G.RX_EYE_CONTRAST_MIN, 'the sclera edge really has gone');
+  assert.ok(v.eyeVsCheek > G.RX_EYE_VS_CHEEK_MIN, 'but the region is not dark like a lens');
+  assert.equal(v.covered, false, 'so it is blurry, not covered');
 });

@@ -16,8 +16,9 @@ A static site. No build step, no framework, no bundler.
 
 ## What it can and cannot do
 
-Benchmarked on 849 real parent/child pairs, it separates kin from strangers with an **AUC of 0.734** —
-a weak but real signal. It **cannot reliably tell which of two parents a child takes after**: true
+Benchmarked on 836 real parent/child pairs, running the shipped code end to end, it separates kin
+from strangers with an **AUC of 0.851** — up from 0.720 before a face-recognition network was added
+alongside the measurements. It **cannot reliably tell which of two parents a child takes after**: true
 pairs score 51.7 against strangers' 44.7, a 7-point separation with ~8 points of spread, and telling
 one parent from another (both of whom are kin) is a far finer distinction than that. It will now say
 "too close to call" often, because that is usually the true answer. The full study, including two of
@@ -57,7 +58,25 @@ percentage — reads as far more authoritative than it has any right to.
 No beautifying, no smoothing, no background removal, no recognition, no matching against any
 database. "Find the head, hold it still, even out the light" is the whole of it.
 
-### 2. Measure it
+### 2. Measure it, and recognise it
+
+Two things look at every face, and the verdict is 60% the first and 40% the second:
+
+**A face-recognition network** (`js/embed.js`) — InsightFace's buffalo_s, a MobileFaceNet trained on
+WebFace600K, 13.6 MB of ONNX run through ONNX Runtime Web, entirely on your device. It turns an
+aligned face into 512 numbers and compares two faces by the cosine between them. On its own it beats
+the measurements decisively (0.845 vs 0.734 held-out). It produces one number and cannot tell you
+whose eyes a child has, which is why the measurements stay.
+
+**The measurements** (`js/measure.js`) — described below. They contribute what the network throws
+away: recognition models are trained to be robust to lighting, so they largely discard colour, and
+colour is the strongest family signal the measurements have. Blended, the two reach 0.868 held-out,
+better than either alone.
+
+If the network cannot load, the app falls back to the measurements alone, switches to their own
+calibration, and says so under the result.
+
+### 2b. What gets measured
 
 `js/mesh.js` runs MediaPipe's face landmarker over the crop: 478 points, both irises, a head-pose
 matrix and blendshapes. `js/measure.js` turns those into about thirty-five measurements.

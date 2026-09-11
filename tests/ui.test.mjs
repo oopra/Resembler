@@ -22,6 +22,28 @@ async function stubMesh(p, queue) {
   await p.evaluate((q) => {
     window.__seen = 0;
     window.rxLoadMesh = function (cb) { if (cb) cb(1, ''); return Promise.resolve({}); };
+    window.rxLoadEmbedder = function (cb) { if (cb) cb(1, ''); return Promise.resolve({}); };
+
+    // A stand-in recognition model that behaves like a real one rather than like landmarks: the same
+    // face gives the same vector (cosine 1), two different faces give near-orthogonal ones (cosine
+    // ~0). That is the range ArcFace actually occupies — unrelated pairs measured at a median cosine
+    // of 0.04. An earlier stub summed raw coordinates, so every face pointed the same way, every
+    // cosine clamped to 100, and the blend had nothing left to contribute.
+    window.rxEmbed = async function (canvas, pts) {
+      let h = 2166136261;
+      for (const pt of pts) {
+        h ^= Math.round(pt[0] * 100000); h = Math.imul(h, 16777619);
+        h ^= Math.round(pt[1] * 100000); h = Math.imul(h, 16777619);
+      }
+      let seed = h >>> 0;
+      const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff) / 0x7fffffff);
+      const v = [];
+      for (let i = 0; i < 64; i++) v.push(rnd() * 2 - 1);
+      let n = 0; for (const x of v) n += x * x;
+      n = Math.sqrt(n) || 1;
+      return Float32Array.from(v.map((x) => x / n));
+    };
+
     window.rxDetect = function () {
       const f = q[window.__seen++ % q.length];
       return { pts: f.pts, blend: f.blend || {}, pose: f.pose || { yaw: 0, pitch: 0, roll: 0 },
@@ -192,7 +214,7 @@ test('the result shows every feature, the crops that were measured, and where th
   assert.deepEqual(r.names, ['Mum', 'Dad']);
   assert.ok(r.childShown && r.cropsShown, 'you can see exactly which crops were measured');
   assert.ok(r.notes.length > 0 && r.notes.every((n) => /closest on /.test(n)), 'each note cites a measurement');
-  assert.match(r.provenance, /2 readings.*measured on this device · nothing was uploaded/);
+  assert.match(r.provenance, /2 readings.*face-recognition model \+ measurements \(60\/40\).*nothing was uploaded/);
 });
 
 test('features are attributed one at a time — her nose from one, his eyes from the other', async () => {

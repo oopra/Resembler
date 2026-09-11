@@ -25,6 +25,38 @@ if(typeof RX_MEASURES === 'undefined' && typeof require === 'function'){
   globalThis.rxCompare = require('./measure.js').rxCompare;
 }
 
+/* ---- the two scales ----
+   The app scores on the blend of a face-recognition embedding and the measurements when the model is
+   available, and on the measurements alone when it is not (an old browser, a failed download). Those
+   are different rulers with different noise, so each carries its own thresholds and its own measured
+   null — using the geometry's thresholds on the blend, or the reverse, would be the same mistake as
+   before in a new coat. Both sets were derived the same way: 4000 simulated comparisons between one
+   child and two UNRELATED adults, on KinFaceW-II. See tools/README-calibration.md. */
+var RX_EMB_WEIGHT = 0.6;      // blend: 60% recognition model, 40% measurements. Tuned on a training
+                              // half and confirmed on the held-out half (0.868 vs 0.845 and 0.734).
+var RX_EMB_LO = -0.1314;      // 1st and 99th percentile of the cosine between two aligned faces,
+var RX_EMB_HI = 0.3079;       // used to put the embedding on the same 0-100 scale as the geometry.
+
+var RX_SCALES = {
+  blend: {
+    clear: 27, lean: 16,
+    nullGap: [{ gap: 9.3, chance: 50 }, { gap: 15.8, chance: 25 }, { gap: 22.8, chance: 10 },
+              { gap: 27.0, chance: 5 }, { gap: 33.9, chance: 1 }]
+  },
+  geometry: {
+    clear: 19, lean: 11,
+    nullGap: [{ gap: 6.0, chance: 50 }, { gap: 10.4, chance: 25 }, { gap: 15.6, chance: 10 },
+              { gap: 18.7, chance: 5 }, { gap: 25.2, chance: 1 }]
+  }
+};
+var rxScale = RX_SCALES.geometry;
+function rxUseScale(name){ rxScale = RX_SCALES[name] || RX_SCALES.geometry; return rxScale; }
+/* An embedding cosine on the same 0-100 ruler as the measurements. */
+function rxEmbLikeness(cosine){
+  if(typeof cosine !== 'number' || !isFinite(cosine)) return null;
+  return Math.max(0, Math.min(100, 100 * (cosine - RX_EMB_LO) / (RX_EMB_HI - RX_EMB_LO)));
+}
+
 /* These three numbers are the whole of this app's restraint, and the first version got them badly
    wrong. They were set by judgement; measured against a null distribution built from 4000 simulated
    three-photo comparisons between UNRELATED people, the old "clear lead" threshold of 10 points fired
@@ -34,22 +66,17 @@ if(typeof RX_MEASURES === 'undefined' && typeof require === 'function'){
 
    They are now set from that null: a gap has to be larger than 75% of chance gaps before the app
    will say "leans", and larger than 95% of them before it will say "takes after". */
-var RX_FEATURE_MARGIN = 10;  // a feature is "shared" unless someone leads it by this much
-var RX_CLEAR_GAP     = 19;   // "takes after": bigger than 95% of chance gaps
-var RX_LEAN_GAP      = 11;   // "leans towards": bigger than 75% of chance gaps (the null p75 is 10.4)
+/* The per-feature bar stays on the geometry scale whichever headline ruler is in use, because the
+   feature scores ARE the measurements — the recognition model produces one number and has no opinion
+   about whose nose anyone has. */
+var RX_FEATURE_MARGIN = 10;
 
-/* The measured null: how big a winning margin two UNRELATED adults produce against one child, purely
-   by chance. Used to tell you, in plain numbers, how often chance alone would beat what you are
-   looking at. From KinFaceW-II; see tools/README-calibration.md. */
-var RX_NULL_GAP = [
-  { gap: 6.0,  chance: 50 }, { gap: 10.4, chance: 25 }, { gap: 15.6, chance: 10 },
-  { gap: 18.7, chance: 5 },  { gap: 25.2, chance: 1 }
-];
-/* Roughly how often a gap this big turns up between two unrelated people. */
+/* Roughly how often a gap this big turns up between two unrelated people, on whichever ruler is in
+   use. This is the number that stops a margin being presented bare. */
 function rxChanceOf(gap){
-  if(gap >= RX_NULL_GAP[RX_NULL_GAP.length - 1].gap) return 1;
-  for(var i = 0; i < RX_NULL_GAP.length; i++) if(gap < RX_NULL_GAP[i].gap)
-    return i === 0 ? 100 : RX_NULL_GAP[i - 1].chance;
+  var N = rxScale.nullGap;
+  if(gap >= N[N.length - 1].gap) return 1;
+  for(var i = 0; i < N.length; i++) if(gap < N[i].gap) return i === 0 ? 100 : N[i - 1].chance;
   return 1;
 }
 /* A feature is scored from several measurements. If an expression knocks out most of them, what is
@@ -162,7 +189,11 @@ function rxMergeRounds(rounds, n){
    all; `share` is the same numbers normalised to 100 — the "60% Mum / 40% Dad" split people want.
    Two people can be 80 and 78 alike (a strong family face, no winner) or 30 and 28 (nobody
    especially), and share alone cannot tell those apart. */
-function rxOverall(table, n){
+/* `embScores` is an optional array of 0-100 embedding likenesses, one per person. When present the
+   headline score is the blend; when absent it is the measurements alone, and the caller is expected
+   to have selected the matching scale. The per-feature table is untouched either way — the
+   recognition model produces one number and cannot say whose eyes anyone has. */
+function rxOverall(table, n, embScores){
   // A feature counts only if EVERY person has a score for it. If a grin made the child's mouth
   // uncomparable against one parent, that mouth cannot quietly be counted for the other parent
   // instead — the comparison has to be like for like or it is not a comparison.
@@ -189,9 +220,20 @@ function rxOverall(table, n){
     }
     raw.push(wsum ? vsum / wsum : null);
   }
+  var geometry = raw.slice();
+  if(embScores){
+    for(p = 0; p < n; p++){
+      var e = embScores[p];
+      if(typeof e !== 'number' || !isFinite(e)) continue;
+      raw[p] = (typeof raw[p] === 'number')
+        ? RX_EMB_WEIGHT * e + (1 - RX_EMB_WEIGHT) * raw[p]
+        : e;                       // no measurements survived: the model alone is better than nothing
+    }
+  }
   var total = raw.reduce(function(a, b){ return a + (typeof b === 'number' ? b : 0); }, 0);
-  return { raw: raw, share: raw.map(function(v){
-    return (typeof v !== 'number' || total <= 0) ? null : (v / total) * 100; }) };
+  return { raw: raw, geometry: geometry, embedding: embScores || null,
+    share: raw.map(function(v){
+      return (typeof v !== 'number' || total <= 0) ? null : (v / total) * 100; }) };
 }
 
 /* ---- 4. calling a feature ---- */
@@ -276,8 +318,8 @@ function rxVerdict(overall, calls, rounds, n){
 
   var confidence = 'mix';
   if(ranked.length < 2) confidence = 'only';
-  else if(gap >= RX_CLEAR_GAP && stability >= 0.99) confidence = 'clear';
-  else if(gap >= RX_LEAN_GAP && stability >= 0.5) confidence = 'lean';
+  else if(gap >= rxScale.clear && stability >= 0.99) confidence = 'clear';
+  else if(gap >= rxScale.lean && stability >= 0.5) confidence = 'lean';
 
   return { leader: leader, runnerUp: runnerUp, gap: gap, confidence: confidence, stability: stability,
            mix: calls.filter(rxAttributed) };
@@ -296,8 +338,10 @@ function rxHeadline(verdict, names){
 
 if(typeof module !== 'undefined' && module.exports){
   module.exports = { RX_FEATURES: RX_FEATURES, RX_FEATURE_KEYS: RX_FEATURE_KEYS,
-    RX_FEATURE_MARGIN: RX_FEATURE_MARGIN, RX_CLEAR_GAP: RX_CLEAR_GAP, RX_LEAN_GAP: RX_LEAN_GAP,
-    RX_MIN_COVERAGE: RX_MIN_COVERAGE, RX_NULL_GAP: RX_NULL_GAP, rxChanceOf: rxChanceOf,
+    RX_FEATURE_MARGIN: RX_FEATURE_MARGIN,
+    RX_MIN_COVERAGE: RX_MIN_COVERAGE, RX_SCALES: RX_SCALES, RX_EMB_WEIGHT: RX_EMB_WEIGHT,
+    RX_EMB_LO: RX_EMB_LO, RX_EMB_HI: RX_EMB_HI, rxUseScale: rxUseScale, rxEmbLikeness: rxEmbLikeness,
+    rxChanceOf: rxChanceOf,
     rxFeature: rxFeature, rxAttributed: rxAttributed,
     rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,
     rxOverall: rxOverall, rxFeatureCall: rxFeatureCall, rxAllCalls: rxAllCalls, rxWonBy: rxWonBy,

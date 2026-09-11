@@ -212,6 +212,26 @@ async function rxEnsureMesh(){
   });
 }
 
+/* The recognition model is loaded only when a comparison is actually run — framing photos needs the
+   mesh alone, so there is no reason to make someone wait for 25 MB before they have even picked a
+   picture. If it will not load (an old browser, a failed download) the app carries on with the
+   measurements alone, on their own calibration, and says so. */
+var rxEmbeddingReady = false;
+async function rxEnsureEmbedder(){
+  if(rxEmbeddingReady) return true;
+  try{
+    await rxLoadEmbedder(function(frac, label){
+      if(frac >= 1){ rxStatus(''); rxProgress(-1); return; }
+      rxStatus(label);
+      rxProgress(frac);
+    });
+    rxEmbeddingReady = true;
+  }catch(e){
+    rxEmbeddingReady = false;
+  }
+  return rxEmbeddingReady;
+}
+
 async function rxAutoFrameCard(card, quiet){
   if(!card.src) return;
   try{
@@ -352,7 +372,7 @@ function rxProgress(frac){
 
 /* Read one face once: crop it (at this reading's jitter), find the mesh in the crop, measure it, and
    sample its colours off the same pixels that were measured. */
-function rxReadFace(card, jitter){
+async function rxReadFace(card, jitter){
   var frame = rxClampFrame({ cx: card.frame.cx, cy: card.frame.cy, size: card.frame.size * jitter,
                              angle: card.frame.angle }, card.dims.w, card.dims.h);
   var out = rxRenderFace(card.src, frame, {});
@@ -366,7 +386,11 @@ function rxReadFace(card, jitter){
   if(!vals) return { ok: false, why: 'noface', prepared: out };
   var colours = rxSampleColours(out.canvas, got.pts);
   Object.keys(colours).forEach(function(k){ vals[k] = colours[k]; });
-  return { ok: true, vals: vals, blend: got.blend, pose: got.pose, faces: got.faces, prepared: out };
+  var vec = null;
+  if(rxEmbeddingReady){
+    try{ vec = await rxEmbed(out.canvas, got.pts); }catch(e){ vec = null; }
+  }
+  return { ok: true, vals: vals, vec: vec, blend: got.blend, pose: got.pose, faces: got.faces, prepared: out };
 }
 
 async function rxRunComparison(){
@@ -380,19 +404,23 @@ async function rxRunComparison(){
 
   try{
     await rxEnsureMesh();
-    rxStatus('Measuring…');
-    await rxYield();
 
     // First reading, at the true crop. It also decides who is in the comparison at all: a photo the
     // mesh cannot find a face in is reported and set aside, rather than being carried through as a
     // row of blanks that drag on everyone else's scores.
-    var childRead = rxReadFace(rxChild, RX_JITTER[0]);
+    await rxEnsureEmbedder();
+    rxUseScale(rxEmbeddingReady ? 'blend' : 'geometry');
+    rxStatus('Measuring…');
+    await rxYield();
+
+    var childRead = await rxReadFace(rxChild, RX_JITTER[0]);
     if(!childRead.ok) throw new Error(childRead.why === 'eyes'
       ? 'The child’s eyes are hidden — sunglasses, heavy shadow or a hat brim. Everything here is measured relative to the distance between the pupils, so with the eyes covered there is nothing to measure against. Use a photo where both eyes are visible.'
       : 'No face could be found in the child’s photo. Try a clearer, straight-on picture, or frame the head by hand.');
     rxChild.pose = childRead.pose; rxChild.faces = childRead.faces;
 
-    var firstReads = people.map(function(c){ return rxReadFace(c, RX_JITTER[0]); });
+    var firstReads = [];
+    for(var fi = 0; fi < people.length; fi++) firstReads.push(await rxReadFace(people[fi], RX_JITTER[0]));
     var failed = [], keep = [];
     firstReads.forEach(function(r, i){
       if(r.ok){ keep.push(i); return; }
@@ -423,8 +451,9 @@ async function rxRunComparison(){
       rxStatus('Measuring… reading ' + (k + 1) + ' of ' + passes);
       await rxYield();
       var jitter = RX_JITTER[k % RX_JITTER.length];
-      var again = rxReadFace(rxChild, jitter);
-      var others = people.map(function(c){ return rxReadFace(c, jitter); });
+      var again = await rxReadFace(rxChild, jitter);
+      var others = [];
+      for(var oi = 0; oi < people.length; oi++) others.push(await rxReadFace(people[oi], jitter));
       if(!again.ok || others.some(function(r){ return !r.ok; })) continue;   // a wobbly re-crop is not a failure
       rounds.push(rxRound(again.vals, others.map(function(r){ return r.vals; }),
                           others.map(function(r, i2){
@@ -433,8 +462,18 @@ async function rxRunComparison(){
                           })));
     }
 
+    // One embedding likeness per person, against the child. Null when the model is unavailable, in
+    // which case rxOverall falls back to the measurements and the geometry scale is already selected.
+    var embScores = null;
+    if(rxEmbeddingReady && childRead.vec){
+      embScores = keep.map(function(i){
+        return firstReads[i].vec ? rxEmbLikeness(rxCosine(childRead.vec, firstReads[i].vec)) : null;
+      });
+    }
+
     rxStatus('');
     rxShowResults({ people: people, names: names, prepared: prepared, childPrepared: childPrepared,
+                    embScores: embScores, embeddingUsed: !!embScores,
                     // The count reported is the number of readings that actually landed, not the
                     // number asked for: a re-crop the mesh could not read is skipped, and saying
                     // "3 readings" over 2 would be a small lie in the app's own provenance line.
@@ -493,7 +532,7 @@ function rxExpressionNotes(childBlend, reads, names, blocked){
 function rxShowResults(run){
   var n = run.people.length;
   var table = rxMergeRounds(run.rounds, n);
-  var overall = rxOverall(table, n);
+  var overall = rxOverall(table, n, run.embScores);
   var calls = rxAllCalls(table, n);
   var verdict = rxVerdict(overall, calls, run.rounds, n);
   rxLastRun = { run: run, table: table, overall: overall, calls: calls, verdict: verdict };
@@ -506,7 +545,8 @@ function rxShowResults(run){
 
   document.getElementById('provenance').textContent =
     run.passes + (run.passes === 1 ? ' reading' : ' readings, each from a slightly different crop') +
-    ' · measured on this device · nothing was uploaded';
+    (run.embeddingUsed ? ' · face-recognition model + measurements (60/40)' : ' · measurements only') +
+    ' · all on this device · nothing was uploaded';
 
   var res = document.getElementById('results');
   res.hidden = false;
@@ -608,6 +648,14 @@ function rxRenderMix(run, calls){
 function rxRenderFeatures(run, table, calls){
   var box = document.getElementById('featureTable');
   box.innerHTML = '';
+  if(run.embeddingUsed){
+    var note = document.createElement('p');
+    note.className = 'ftable-note';
+    note.textContent = 'The verdict above mostly comes from a face-recognition model, which produces ' +
+      'a single number. The breakdown below is the measurements — it is where "whose eyes" comes from, ' +
+      'and it can disagree with the headline.';
+    box.appendChild(note);
+  }
   calls.forEach(function(call){
     var f = rxFeature(call.key);
     var row = document.createElement('div');

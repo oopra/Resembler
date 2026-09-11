@@ -161,6 +161,72 @@ Sunglasses remain the exception that is detected automatically and refused outri
 break the iris line that every other measurement is scaled by — that is not a group to route around,
 it is the ruler.
 
+## Adding a face-recognition network
+
+The measurements are thirty-five things a person can point at. A recognition network is hundreds of
+thousands of faces' worth of learned structure. Benchmarked the same way, on the same pairs:
+
+| | held-out AUC |
+| --- | --- |
+| measurements only | 0.734 |
+| ArcFace embeddings (buffalo_s / w600k_mbf) | 0.845 |
+| **blend, 60% embedding / 40% measurements** | **0.868** |
+
+The blend beats either alone, and the blend weight was tuned on a training half and confirmed on the
+held-out half rather than chosen. The two are not seeing the same thing: recognition models are
+trained to be robust to lighting, so they largely discard colour — which is the measurements' single
+strongest signal.
+
+On the test that started all of this — a daughter, her real father, and an unrelated woman:
+
+| | picks the real father |
+| --- | --- |
+| measurements only | 67.8% |
+| ArcFace | 77.4% |
+| blend | 80.8% |
+
+### Verified on the shipped code, not just the experiment
+
+Re-running the whole thing through the actual `js/*.js` the app serves, on 836 pairs it could read
+end to end: **AUC 0.720 → 0.851**, and the father test **69.3% → 75.5%**. Lower than the figures
+above because it is a different pair set with a different random stranger pairing; these are the
+numbers that ship.
+
+That run also found two real bugs the experiment could not:
+
+1. **ONNX Runtime resolves `wasmPaths` against its own module URL**, not the document, so
+   `./vendor/onnxruntime/` became `/vendor/onnxruntime/vendor/onnxruntime/` and nothing loaded. Three
+   different bases are in play in `embed.js` — `fetch` uses the document, `import()` uses the script,
+   ORT uses its own — and the comment there now says so.
+2. **The sunglasses check was too eager.** Requiring *either* signal to fail rejected about 40% of
+   ordinary photographs at low resolution: a blurred eye loses its sclera edge but stays as bright as
+   the cheek. Requiring *both* still catches every real lens (they fail both at once, 0.00 and 0.10)
+   and stopped punishing grainy snapshots. Detection went from ~60% back to ~92%.
+
+### Two rulers
+
+The blend and the measurements-alone score have different noise, so each carries its own null and its
+own thresholds — using one's thresholds on the other would be the original mistake in a new coat.
+
+| | "leans" | "takes after" | chance gap p50 / p95 |
+| --- | --- | --- | --- |
+| blend | 16 | 27 | 9.3 / 27.0 |
+| measurements only | 11 | 19 | 6.0 / 18.7 |
+
+The app selects the scale by whether the recognition model actually loaded, and says which it used in
+the line under the result.
+
+### What it does not fix
+
+The recognition model produces one number. It cannot say whose eyes a child has — that remains the
+measurements' job, which is the other reason both are kept, and the feature breakdown now carries a
+note saying it can disagree with the headline.
+
+And a caveat that cannot be tested from here: recognition models are known to vary in accuracy across
+demographic groups, and KinFaceW-II is one dataset of limited diversity. This is better on average.
+It is not guaranteed better for any particular family, and the app has no way to tell you which you
+are.
+
 ## Reproducing
 
 The scripts live in the session that produced this, not in the repo, because they depend on a dataset
