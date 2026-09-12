@@ -270,6 +270,67 @@ demographic groups, and KinFaceW-II is one dataset of limited diversity. This is
 It is not guaranteed better for any particular family, and the app has no way to tell you which you
 are.
 
+## How humans do it, and which parts of that are worth copying
+
+Three claims from face-perception research, each tested here rather than taken on trust.
+
+### 1. Holistic, not feature-by-feature — confirmed, and it was the whole early mistake
+
+People do not read faces part by part. The face inversion effect (faces are far harder to recognise
+upside down than other objects), the composite effect (the top half of one face and the bottom of
+another fuse into a new identity), and part-whole effects all point the same way: a face is processed
+as a configuration. This app began as thirty-five separate measurements, which is the opposite, and
+that is the best explanation for why a recognition network — trained end to end on whole faces —
+beat it by 0.11 AUC without being designed for kinship at all.
+
+### 2. Norm-based coding: a rare shared trait is worth more — confirmed and implemented
+
+A face is encoded as its departure from an average, so a match counts for as much as it is unusual.
+Two people with ordinary noses both having an ordinary nose is not evidence; most people have one.
+
+Tested on 836 pairs against an identical stranger pairing, weighting each measurement by how far the
+shared value sits from the population norm (the milder of the two departures, conservatively):
+
+| rarity multiplier | AUC |
+| --- | --- |
+| 0 (flat, as it was) | 0.7258 |
+| 1 | 0.7361 |
+| **2 (shipped)** | **0.7388** |
+| 4 | 0.7397 |
+
+**+0.013, 95% CI [0.007, 0.016]** on a paired bootstrap — small, real, and in the predicted
+direction. Shipped at 2, which takes nearly all of the gain. End to end this moved the measurements
+from 0.720 to 0.733 and the blended verdict from 0.851 to 0.854. The norms are the median and half
+the 16–84 percentile range over 1816 measured faces; they describe that benchmark, not humanity,
+which is why the multiplier is modest.
+
+### 3. The upper face carries more kinship — confirmed, but already exploited
+
+Masking half of each aligned face before the recognition model sees it, on 259 pairs:
+
+| shown to the model | AUC |
+| --- | --- |
+| whole face | 0.824 |
+| eyes, brows, forehead only | 0.790 (−0.033) |
+| nose tip, mouth, jaw only | 0.712 (−0.112) |
+
+Upper minus lower: **+0.079, 95% CI [0.031, 0.125]**. Hiding the entire bottom half costs almost
+nothing. But adding a separate upper-face view alongside the whole-face one gains **−0.001** on
+held-out data: the model already uses what is there, so there is nothing to harvest. Confirmed,
+interesting, not actionable.
+
+Worth recording: the hand-built measurements **fail** to reproduce this. With colour removed, the
+three regions score 0.605 (upper), 0.591 (middle), 0.620 (lower) — indistinguishable. The earlier
+apparent upper-face advantage was entirely eye colour sitting in the upper group. Whatever the
+network finds around the eyes, thirty-five ratios do not capture it.
+
+### What was not tested, and matters
+
+Human resemblance judgements are badly contaminated by context — people told a child is a man's son
+report more resemblance than people shown the same pair unlabelled. That is a fact about people, not
+about faces, and it is the reason this app hides nothing from itself but shows the odds against
+chance: the number is there to resist the same pull.
+
 ## Reproducing
 
 The scripts live in the session that produced this, not in the repo, because they depend on a dataset

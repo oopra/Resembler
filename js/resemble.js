@@ -21,8 +21,10 @@
    Assigning onto globalThis rather than declaring with `var` keeps the browser's real globals from
    being shadowed by a hoisted, never-assigned local. */
 if(typeof RX_MEASURES === 'undefined' && typeof require === 'function'){
-  globalThis.RX_MEASURES = require('./measure.js').RX_MEASURES;
-  globalThis.rxCompare = require('./measure.js').rxCompare;
+  var rxM = require('./measure.js');
+  globalThis.RX_MEASURES = rxM.RX_MEASURES;
+  globalThis.rxCompare = rxM.rxCompare;
+  globalThis.rxWeights = rxM.rxWeights;
 }
 
 /* ---- the two scales ----
@@ -161,9 +163,11 @@ function rxFeature(key){ return RX_FEATURES.filter(function(f){ return f.key ===
    and "measured, and they are nothing alike" must never come out looking the same. */
 /* What fraction of each feature's weight actually produced a number — 1 when everything in it was
    measurable, 0 when none of it was. */
-function rxCoverage(mscores){
+function rxCoverage(mscores, weights){
   var got = {}, all = {}, out = {};
   RX_MEASURES.forEach(function(m){
+    // Coverage is about how much of a feature survived, so it uses the BASE weights: a feature is
+    // not better covered just because the traits in it happened to be unusual.
     all[m.feature] = (all[m.feature] || 0) + m.w;
     var v = mscores[m.key];
     if(typeof v === 'number' && isFinite(v)) got[m.feature] = (got[m.feature] || 0) + m.w;
@@ -172,16 +176,18 @@ function rxCoverage(mscores){
   return out;
 }
 
-function rxRollUp(mscores){
+function rxRollUp(mscores, weights){
   var out = {};
   RX_FEATURE_KEYS.forEach(function(fk){ out[fk] = null; });
   var acc = {};
   RX_MEASURES.forEach(function(m){
     var v = mscores[m.key];
     if(typeof v !== 'number' || !isFinite(v)) return;
+    var w = (weights && typeof weights[m.key] === 'number') ? weights[m.key] : m.w;
+    if(w <= 0) return;
     if(!acc[m.feature]) acc[m.feature] = { s: 0, w: 0 };
-    acc[m.feature].s += v * m.w;
-    acc[m.feature].w += m.w;
+    acc[m.feature].s += v * w;
+    acc[m.feature].w += w;
   });
   Object.keys(acc).forEach(function(fk){ if(acc[fk].w > 0) out[fk] = acc[fk].s / acc[fk].w; });
   return out;
@@ -195,8 +201,9 @@ function rxRound(childVals, peopleVals, blocked){
   RX_FEATURE_KEYS.forEach(function(fk){ features[fk] = new Array(n); coverage[fk] = new Array(n); });
   peopleVals.forEach(function(vals, p){
     var ms = rxCompare(childVals, vals, blocked && blocked[p]);
+    var wts = rxWeights(childVals, vals, blocked && blocked[p]);
     RX_MEASURES.forEach(function(m){ measures[m.key][p] = ms[m.key]; });
-    var fs = rxRollUp(ms), cv = rxCoverage(ms);
+    var fs = rxRollUp(ms, wts), cv = rxCoverage(ms, wts);
     RX_FEATURE_KEYS.forEach(function(fk){ features[fk][p] = fs[fk]; coverage[fk][p] = cv[fk]; });
   });
   return { measures: measures, features: features, coverage: coverage };

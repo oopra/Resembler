@@ -97,6 +97,10 @@ Similarity for each measurement is `100 × exp(−|difference| ÷ tolerance)`: i
 tolerance away is 37, two is 14. A smooth curve, so no single measurement flips a verdict by moving a
 hair.
 
+> **A rare shared trait counts for more than a common one**, as it does in human face perception,
+> which encodes a face by its departure from an average. Each measurement is weighted by how unusual
+> the shared value is — worth +0.013 AUC, CI [0.007, 0.016]. See the calibration notes.
+
 > **On the weights.** They are measured, not chosen. Each is proportional to how well that
 > measurement separates 849 real parent/child pairs from unrelated pairs, on the KinFaceW-II kinship
 > dataset — see **[tools/README-calibration.md](tools/README-calibration.md)**. An earlier version

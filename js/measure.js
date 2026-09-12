@@ -147,6 +147,44 @@ var RX_MEASURES = [
 var RX_MEASURE_BY_KEY = {};
 RX_MEASURES.forEach(function(m){ RX_MEASURE_BY_KEY[m.key] = m; });
 
+/* ---- how unusual is the thing they share? ----
+   Human face perception is norm-based: a face is encoded as its departure from an average, and a
+   shared trait counts for as much as it is unusual. Two people with ordinary noses both having an
+   ordinary nose is not evidence of anything — most people have one. Two people sharing a distinctly
+   narrow bridge is.
+
+   The app scored every match the same until this. Tested on 836 real parent/child pairs against the
+   same stranger pairing, weighting each measurement by how far the shared value sits from the
+   population norm lifts kin-vs-stranger AUC from 0.726 to 0.739 — +0.013, 95% CI [0.007, 0.016] on
+   a paired bootstrap. Small, but real and in the direction the perception literature predicts.
+
+   The norms below are the median and a robust spread (half the 16th-to-84th percentile range, so one
+   odd face in the benchmark cannot set the standard for everybody) over 1816 measured faces. They
+   describe that benchmark, not humanity — a limitation, and the reason the multiplier is modest. */
+var RX_POP = {"eye_width":{"mu":0.4189,"sd":0.0186},"intercanthal":{"mu":0.5509,"sd":0.025},"eye_open":{"mu":0.3332,"sd":0.085},"canthal_tilt":{"mu":4.5145,"sd":3.0391},"brow_lift":{"mu":0.2695,"sd":0.0516},"brow_gap":{"mu":0.4818,"sd":0.024},"brow_peak":{"mu":0.3494,"sd":0.0128},"brow_tilt":{"mu":-6.4239,"sd":4.4487},"alar_width":{"mu":0.651,"sd":0.0477},"nose_len":{"mu":0.7315,"sd":0.0658},"nose_wl":{"mu":0.8906,"sd":0.0988},"nostril_w":{"mu":0.8261,"sd":0.0226},"tip_proj":{"mu":0.2802,"sd":0.0969},"mouth_w":{"mu":0.8981,"sd":0.1344},"lip_upper":{"mu":0.0808,"sd":0.0213},"lip_lower":{"mu":0.1437,"sd":0.023},"lip_balance":{"mu":0.5762,"sd":0.1144},"philtrum":{"mu":0.203,"sd":0.0398},"cheek_w":{"mu":1.9523,"sd":0.0708},"cheek_drop":{"mu":0.23,"sd":0.0266},"midface":{"mu":0.731,"sd":0.0666},"bigonial":{"mu":1.7666,"sd":0.0983},"taper":{"mu":0.8303,"sd":0.0245},"chin_h":{"mu":0.3824,"sd":0.08},"chin_w":{"mu":0.4174,"sd":0.0288},"gonial":{"mu":133.0464,"sd":4.9964},"face_w":{"mu":2.1259,"sd":0.0952},"face_h":{"mu":2.3358,"sd":0.1297},"face_wh":{"mu":0.9091,"sd":0.0507},"third_up":{"mu":0.289,"sd":0.019},"third_mid":{"mu":0.3129,"sd":0.0232},"third_low":{"mu":0.3981,"sd":0.0376},"forehead_w":{"mu":1.7834,"sd":0.0578},"skin_L":{"mu":81.3546,"sd":14.2623},"skin_a":{"mu":-1.4558,"sd":6.1289},"skin_b":{"mu":-3.7452,"sd":6.5107},"eye_L":{"mu":24.0122,"sd":18.6547},"eye_a":{"mu":5.711,"sd":6.6183},"eye_b":{"mu":4.809,"sd":6.8597}};
+var RX_RARITY = 2.0;   // higher scored marginally better still, but this takes nearly all of the gain
+
+/* The weight a measurement carries for THIS pair: its base weight, raised by how far the value they
+   share sits from the norm. The milder of the two departures is used, which is the conservative
+   reading — a match is only as rare as its least unusual half. */
+function rxRarityWeight(m, a, b){
+  var pop = RX_POP[m.key];
+  if(!pop || !pop.sd) return m.w;
+  var za = Math.abs((a - pop.mu) / pop.sd), zb = Math.abs((b - pop.mu) / pop.sd);
+  return m.w * (1 + RX_RARITY * Math.min(za, zb));
+}
+/* Per-measurement weights for one comparison, in the same shape the roll-up expects. */
+function rxWeights(child, adult, blocked){
+  var out = {};
+  RX_MEASURES.forEach(function(m){
+    var a = child[m.key], b = adult[m.key];
+    if(typeof a !== 'number' || typeof b !== 'number' || !isFinite(a) || !isFinite(b) ||
+       (blocked && blocked[m.key])){ out[m.key] = 0; return; }
+    out[m.key] = rxRarityWeight(m, a, b);
+  });
+  return out;
+}
+
 /* ---- things worn on a face, and what they cost to work around ----
 
    You cannot remove a cap from a photograph. Anything that claims to is a model INVENTING a
@@ -322,7 +360,8 @@ function rxPose(matrix){
 
 if(typeof module !== 'undefined' && module.exports){
   module.exports = { RX_P: RX_P, RX_MEASURES: RX_MEASURES, RX_MEASURE_BY_KEY: RX_MEASURE_BY_KEY,
-    RX_OCCLUDERS: RX_OCCLUDERS, RX_OCCLUDER_BY_ID: RX_OCCLUDER_BY_ID,
+    RX_OCCLUDERS: RX_OCCLUDERS, RX_OCCLUDER_BY_ID: RX_OCCLUDER_BY_ID, RX_POP: RX_POP,
+    RX_RARITY: RX_RARITY, rxRarityWeight: rxRarityWeight, rxWeights: rxWeights,
     rxOccluderBlocks: rxOccluderBlocks, rxMergeBlocks: rxMergeBlocks,
     RX_EXPR_LEVEL: RX_EXPR_LEVEL, rxAlign: rxAlign, rxMeasure: rxMeasure, rxScore: rxScore,
     rxCompare: rxCompare, rxBlocked: rxBlocked, rxPose: rxPose };

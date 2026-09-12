@@ -701,3 +701,62 @@ test('rxIdentityGroup: missing embeddings are simply not linked', () => {
   const cos = [[1.00, null], [null, 1.00]];
   assert.deepEqual(R.rxIdentityGroup(cos), [true, false]);
 });
+
+/* ---------- rarity: an unusual shared trait counts for more ---------- */
+
+test('rxRarityWeight: a shared ordinary trait counts less than a shared unusual one', () => {
+  // Norm-based coding, which is how human face perception works: a face is encoded as its departure
+  // from an average, and a match is worth as much as it is unusual. Most people have an ordinary
+  // nose, so two of them sharing one is not evidence.
+  const m = M.RX_MEASURE_BY_KEY.alar_width;
+  const pop = M.RX_POP.alar_width;
+  const ordinary = M.rxRarityWeight(m, pop.mu, pop.mu);
+  const unusual = M.rxRarityWeight(m, pop.mu + 2 * pop.sd, pop.mu + 2 * pop.sd);
+  assert.equal(ordinary, m.w, 'a bang-average shared value carries only the base weight');
+  assert.ok(unusual > ordinary * 2, `a strikingly narrow nose should count for much more (${unusual} vs ${ordinary})`);
+});
+
+test('rxRarityWeight: rarity is the milder of the two, not the wilder', () => {
+  // A match is only as rare as its least unusual half — otherwise one extreme face would make every
+  // comparison against it look remarkable.
+  const m = M.RX_MEASURE_BY_KEY.alar_width, pop = M.RX_POP.alar_width;
+  const lopsided = M.rxRarityWeight(m, pop.mu + 4 * pop.sd, pop.mu);
+  assert.equal(lopsided, m.w, 'one extreme value and one ordinary one is not a rare match');
+});
+
+test('rxWeights: blocked and unmeasurable things get no weight at all', () => {
+  const a = {}, b = {};
+  for (const m of M.RX_MEASURES) { a[m.key] = M.RX_POP[m.key] ? M.RX_POP[m.key].mu : 1; b[m.key] = a[m.key]; }
+  const open = M.rxWeights(a, b, null);
+  assert.ok(open.alar_width > 0);
+  const shut = M.rxWeights(a, b, { alar_width: true });
+  assert.equal(shut.alar_width, 0);
+  const missing = M.rxWeights({}, b, null);
+  assert.equal(missing.alar_width, 0, 'a measurement the child has no value for carries nothing');
+});
+
+test('the population norms describe every measurement that is scored', () => {
+  for (const m of M.RX_MEASURES) {
+    const pop = M.RX_POP[m.key];
+    assert.ok(pop, `${m.key} has no population norm, so its rarity cannot be judged`);
+    assert.ok(pop.sd > 0, `${m.key} has a zero spread, which would divide by nothing`);
+  }
+});
+
+test('rxRollUp: a rare match moves a feature more than an ordinary one', () => {
+  const mk = (rare) => {
+    const child = {}, adult = {};
+    for (const m of M.RX_MEASURES) {
+      const pop = M.RX_POP[m.key];
+      const v = m.feature === 'nose' && rare ? pop.mu + 2.5 * pop.sd : pop.mu;
+      child[m.key] = v; adult[m.key] = v;
+    }
+    return { child, adult };
+  };
+  const ordinary = mk(false), striking = mk(true);
+  const wOrd = M.rxWeights(ordinary.child, ordinary.adult, null);
+  const wRare = M.rxWeights(striking.child, striking.adult, null);
+  const noseOrd = M.RX_MEASURES.filter((m) => m.feature === 'nose').reduce((s, m) => s + wOrd[m.key], 0);
+  const noseRare = M.RX_MEASURES.filter((m) => m.feature === 'nose').reduce((s, m) => s + wRare[m.key], 0);
+  assert.ok(noseRare > noseOrd * 2, 'the striking nose carries far more of the verdict');
+});
