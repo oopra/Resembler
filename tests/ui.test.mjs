@@ -56,6 +56,29 @@ async function stubMesh(p, queue) {
       return Float32Array.from(v.map((x) => x / n));
     };
 
+    // Three region vectors per face, one per window on the aligned crop. The maps themselves are
+    // NOT stubbed: models/kinmap.bin is fetched and parsed for real, so this exercises the whole
+    // path from file to feature row.
+    window.rxEmbedRegions = async function (canvas, pts) {
+      const salt = { eyes: 101, nose: 202, mouth: 303 };
+      const out = {};
+      for (const name of window.RX_REGIONS) {
+        let h = 2166136261 ^ salt[name];
+        for (const pt of pts) {
+          h ^= Math.round(pt[0] * 100000); h = Math.imul(h, 16777619);
+          h ^= Math.round(pt[1] * 100000); h = Math.imul(h, 16777619);
+        }
+        let seed = h >>> 0;
+        const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff) / 0x7fffffff);
+        const v = [];
+        for (let i = 0; i < 512; i++) v.push(rnd() * 2 - 1);
+        let n = 0; for (const x of v) n += x * x;
+        n = Math.sqrt(n) || 1;
+        out[name] = Float32Array.from(v.map((x) => x / n));
+      }
+      return out;
+    };
+
     window.rxDetect = function () {
       const f = q[window.__seen++ % q.length];
       return { pts: f.pts, blend: f.blend || {}, pose: f.pose || { yaw: 0, pitch: 0, roll: 0 },
@@ -227,7 +250,10 @@ test('the result shows every feature, the crops that were measured, and where th
   assert.deepEqual(r.names, ['Mum', 'Dad']);
   assert.ok(r.childShown && r.cropsShown, 'you can see exactly which crops were measured');
   assert.ok(r.notes.length > 0 && r.notes.every((n) => /closest on /.test(n)), 'each note cites a measurement');
-  assert.match(r.provenance, /2 readings.*face-recognition model \+ measurements \(60\/40\).*nothing was uploaded/);
+  // The provenance line has to name the arrangement that actually produced the numbers: with the
+  // feature maps loaded, three of the eight rows are the recognition model, not measurements.
+  assert.match(r.provenance,
+    /2 readings.*eyes, nose and mouth read by the recognition model; the rest measured.*nothing was uploaded/);
 });
 
 test('features are attributed one at a time — her nose from one, his eyes from the other', async () => {
@@ -770,4 +796,55 @@ test('the page states plainly what is kept and what is not', async () => {
   assert.match(footer, /still never uploaded/);
   assert.match(footer, /Anyone who can unlock this device/);
   assert.match(footer, /Safari clears storage/);
+});
+
+/* ---------- feature by feature, through the real map file ---------- */
+
+test('the feature maps are fetched, applied, and change the rows they were fitted for', async () => {
+  // models/kinmap.bin is served and parsed for real here; only the embeddings feeding it are stubbed.
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.28)), withEmb(B, atCosine(0.05))]);
+  await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 2);
+  await runCompare(page);
+
+  const r = await page.evaluate(() => ({
+    mapsReady: rxMapsReady,
+    scores: rxLastRun.run.regionScores,
+    scale: rxScale === RX_SCALES.regions ? 'regions' : (rxScale === RX_SCALES.blend ? 'blend' : 'geometry'),
+    nose: rxLastRun.table.features.nose.mean,
+    noseSpread: rxLastRun.table.features.nose.spread,
+    jawSpread: rxLastRun.table.features.jaw.spread,
+    lead: document.querySelector('.v-lead').textContent
+  }));
+  assert.equal(r.mapsReady, true, 'the map file must load from the same origin as everything else');
+  assert.ok(r.scores && r.scores.every((s) => s && typeof s.nose === 'number'),
+    'every candidate needs a nose score for the comparison to be like for like');
+  assert.equal(r.scale, 'regions', 'the ruler has to match the evidence the verdict was built from');
+  assert.ok(r.nose.every((v) => typeof v === 'number' && v >= 0 && v <= 100));
+  assert.deepEqual(r.noseSpread, [0, 0],
+    'a region row is one reading of one aligned face — it does not wobble with the crop');
+  assert.ok(r.jawSpread.some((v) => v > 0) || r.jawSpread.every((v) => v === 0),
+    'the unmapped rows keep whatever spread the readings gave them');
+  assert.ok(r.lead.length > 0, 'and the page still reaches a verdict');
+});
+
+test('without the feature maps the app still compares, on the older ruler', async () => {
+  await page.evaluate(() => {
+    window.rxMapsReady = false;
+    window.rxLoadKinmap = () => Promise.reject(new Error('no maps'));
+  });
+  await stubMesh(page, [withEmb(A, REF), withEmb(A, atCosine(0.28)), withEmb(B, atCosine(0.05))]);
+  await fillForm(page, ['Baby', 'Mum', 'Dad'], [1, 1, 3]);
+  await setPasses(page, 2);
+  await runCompare(page);
+  const r = await page.evaluate(() => ({
+    scores: rxLastRun.run.regionScores,
+    scale: rxScale === RX_SCALES.regions ? 'regions' : (rxScale === RX_SCALES.blend ? 'blend' : 'geometry'),
+    lead: document.querySelector('.v-lead').textContent,
+    raw: rxLastRun.overall.raw.map(Math.round)
+  }));
+  assert.equal(r.scores, null, 'no maps, no region scores — not half-applied ones');
+  assert.equal(r.scale, 'blend', 'and the verdict is read off the null that matches');
+  assert.ok(r.raw.every((v) => typeof v === 'number'));
+  assert.ok(r.lead.length > 0);
 });

@@ -283,6 +283,12 @@ as a configuration. This app began as thirty-five separate measurements, which i
 that is the best explanation for why a recognition network — trained end to end on whole faces —
 beat it by 0.11 AUC without being designed for kinship at all.
 
+**Amended, later in this file.** Feature-by-feature is a bad way to *measure* a face and a good way
+to *use a network on one*: running the whole-face network separately over an eyes, nose and mouth
+window and comparing each window on its own beat the whole-face comparison by +0.030 AUC. What was
+wrong was never "look at features" — it was reading them with rulers instead of with something that
+had seen a hundred thousand faces. See "Feature by feature, the same idea works" below.
+
 ### 2. Norm-based coding: a rare shared trait is worth more — confirmed and implemented
 
 A face is encoded as its departure from an average, so a match counts for as much as it is unusual.
@@ -355,6 +361,11 @@ A correction could only pay if the age effect **interacted with identity** — i
 different faces differently in ways that matter. A linear direction cannot capture that. A generative
 de-ageing model could, in principle, and that is the honest case for the idea.
 
+**This is where the next section picks it up.** A linear *map* is not a generator, but unlike a
+direction it can move different faces differently — and applied per feature rather than to the whole
+face, it works. The negative result below stands as stated: subtracting an average is useless. It was
+the wrong shape of correction, not the wrong idea.
+
 **What stops it being built here.** Three things, in order of severity:
 
 1. **It hallucinates.** A generator asked for "this man's baby" fills everything it does not know
@@ -368,6 +379,87 @@ de-ageing model could, in principle, and that is the honest case for the idea.
    this app already asks for, and would have to run on a phone.
 
 The ceiling argument above suggests the payoff would be small even if all three were solved.
+
+### Feature by feature, the same idea works — tested, and it ships
+
+The result above says a single de-ageing *direction* buys nothing. It does not say the age gap is
+harmless, and the follow-up question — analyse each feature on its own, then correct it — turned out
+to be the right one.
+
+**On the measurements, still nothing.** Each of the 39 measurements got its own age offset, fitted on
+a training half and applied to the held-out half. Every feature: colouring −0.002, mouth +0.007,
+brows +0.007, cheeks +0.004, eyes +0.002, jaw −0.005, face shape −0.006, nose −0.010, and every
+confidence interval crossing zero. Letting each feature choose its own correction strength on the
+training half did not survive the move to the test half — mouth picked 1.5x and then gained −0.000.
+Learning a full map (predicting the child's measurements from the adult's, so a wide jaw can inform
+the expected nose) gave −0.001 per key, −0.002 per feature block, −0.002 across all 39.
+
+**On the network, cutting the face into features changed the answer.** ArcFace was run separately
+over three windows of the aligned crop — eyes, nose, mouth, everything outside painted mid-grey.
+Each window carries real kinship signal alone (0.798 / 0.790 / 0.748 against 0.836 for the whole
+face). Subtracting an age direction per region did nothing again. Replacing the subtraction with a
+**learned linear map** from adult space into child space, fitted inside a PCA subspace of each
+region, did:
+
+| | whole face | eyes | nose | mouth |
+| --- | --- | --- | --- | --- |
+| raw cosine | 0.8386 | 0.7733 | 0.7719 | 0.7006 |
+| mapped adult→child | 0.8163 | 0.7951 | 0.7983 | 0.7417 |
+
+(on KinFaceW-I, maps fitted on KinFaceW-II, so different families and a different dataset)
+
+**Mapping a feature helps; mapping the whole face hurts.** That asymmetry is the finding. A map can
+move different faces differently, which is what a single direction cannot do and what the age effect
+apparently needs — but applied to the whole face it damages the thing the whole-face vector is
+actually for, which is recognising a person.
+
+#### Two ways this nearly went wrong
+
+**The photograph, not the family.** In KinFaceW-II the parent and the child are cropped out of ONE
+picture, so every true pair shares its lighting, camera, focus and JPEG noise and every stranger pair
+does not. Half the effect was exactly that: +0.066 in-domain, +0.037 when the same maps were applied
+to KinFaceW-I, whose pairs come from different photographs. The surviving half is real, and every
+number quoted here is the surviving half. (The same trap had already cost half the colour signal
+earlier in this file, which is the only reason it was checked.)
+
+**Choosing the model on the data it was fitted on.** The first honest-looking protocol picked the
+subspace size by training-set AUC — but the training set included the families the maps were fitted
+on, so it measured fit quality, not generalisation. It chose p=96, which scored better in fitting
+(0.9206 vs 0.9140) and −0.0009 on the test half; p=64 gained +0.022 and +0.038. Refitting the
+protocol so the selection half is unseen by the fit put that right. It is the same mistake as the
+guessed weights this study began with, in a more sophisticated disguise.
+
+#### What ships
+
+Maps fitted on KinFaceW-II only (836 pairs, p=64, ridge shrunk toward the identity map at λ=10), with
+every threshold and weight chosen on one half of KinFaceW-I and reported on the other, both
+directions:
+
+| | shipped before | with per-feature maps | gain |
+| --- | --- | --- | --- |
+| reported on I-odd | 0.8511 | 0.8750 | +0.0239 [+0.0092, +0.0415] |
+| reported on I-even | 0.8445 | 0.8791 | +0.0346 [+0.0256, +0.0617] |
+| all 458 pairs, shipped config | 0.8480 | 0.8776 | +0.0296 [+0.0230, +0.0458] |
+
+Picking the real parent out of a lineup of two: **85.9% → 88.7%**.
+
+Three consequences worth stating plainly:
+
+1. **The landmark ratios for eyes, nose and mouth stopped earning their place in those rows.** The
+   grid was allowed to keep any fraction of them and chose zero: with the network's answer for a
+   feature in hand, the ratios added nothing on top. They are still computed — they are the fallback,
+   and they are what rules a feature out when an expression or an occluder has corrupted it.
+2. **The feature weights turn over again.** Measured the same way as before — (AUC − 0.5) × 10 — they
+   are now nose 3.42, eyes 3.35, mouth 3.17, colouring 1.71, brows 0.87, face shape 0.83, jaw 0.67,
+   cheeks 0.63. Colouring beat every geometric measurement and is now beaten by three features the
+   network can finally see properly.
+3. **A feature the measurements could not reach stays unreached.** The network would read "eyes" off
+   a pair of sunglasses without complaint. A region score is only used where that feature's
+   measurements survived, so occluders and expressions still rule a row out.
+
+The generative version of this idea — actually rendering the baby and comparing photographs — remains
+unbuilt, for the three reasons above. What is shipped is the part of it that can be validated: no
+pixels are invented, so nothing invented can be mistaken for a resemblance.
 
 ### What was not tested, and matters
 
@@ -387,3 +479,18 @@ that cannot be redistributed. The method is small enough to restate exactly:
 3. Per measurement, compute Mann-Whitney AUC of `rxScore` on true pairs vs randomly re-paired ones.
 4. Weight each measurement by `(AUC − 0.5) × 10`; give each feature the mean weight of its members.
 5. For the null, sample one child and two unrelated adults 4000 times and record `|scoreA − scoreB|`.
+
+For the per-feature maps, add KinFaceW-I (the different-photo dataset — it is the whole defence
+against measuring the photograph instead of the family):
+
+6. Re-run the aligned 112×112 ArcFace crop three more times per face, painting everything outside
+   each window mid-grey: eyes `[14,32,98,64]`, nose `[30,56,82,86]`, mouth `[22,78,90,108]`.
+7. On KinFaceW-II only, per region: centre the embeddings, take the top 64 principal directions, and
+   solve `W = (XᵀX + λI)⁻¹(XᵀY + λI)` with X the adults, Y their children, λ=10. Shrinking toward
+   the **identity** matters — it puts the uncorrected comparison inside the family of models being
+   searched, so "no correction" can win if it deserves to.
+8. Score a region as `cos(normalise(P(adult)·W), normalise(P(child)))`, scaled 0–100 on the 1st/99th
+   percentiles of that region's cosines.
+9. Choose every remaining constant on one half of KinFaceW-I and report on the other. Do it in both
+   directions. Never select on families the maps were fitted on — see "Two ways this nearly went
+   wrong".

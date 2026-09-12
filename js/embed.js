@@ -94,25 +94,30 @@ function rxLoadEmbedder(onProgress){
   return rxEmbState.loading;
 }
 
-/* A prepared face canvas + its landmarks → 512 numbers, unit length. Null if it cannot be aligned. */
-async function rxEmbed(canvas, pts){
-  if(!rxEmbState.session) throw new Error('The face-recognition model has not been loaded yet.');
+/* The aligned 112x112 crop the network expects, or null if the face cannot be aligned. `fill` is
+   what shows through where the face does not reach — black for the whole-face pass, which is what
+   the recognition model was calibrated on here, and mid-grey for the region passes, which is what
+   the feature maps in kinmap.js were fitted through. */
+function rxAlignedCrop(canvas, pts, fill){
   var W = canvas.width, H = canvas.height;
   var at = function(i){ return [pts[i][0] * W, pts[i][1] * H]; };
   var src = [at(RX_P.irisL), at(RX_P.irisR), at(RX_P.noseTip), at(RX_P.mouthL), at(RX_P.mouthR)];
   var m = rxSimilarity(src, RX_ARC_TEMPLATE);
   if(!m) return null;
-
   var c = document.createElement('canvas');
   c.width = 112; c.height = 112;
   var ctx = c.getContext('2d');
-  ctx.fillStyle = '#000';
+  ctx.fillStyle = fill || '#000';
   ctx.fillRect(0, 0, 112, 112);
   ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
   ctx.drawImage(canvas, 0, 0);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return ctx;
+}
 
-  // The model wants RGB planes, each pixel mapped to roughly [-1, 1].
+/* Run the network over a prepared 112x112 context. The model wants RGB planes, each pixel mapped to
+   roughly [-1, 1]. */
+async function rxRunEmbed(ctx){
   var px = ctx.getImageData(0, 0, 112, 112).data;
   var t = new Float32Array(3 * 112 * 112), i, p, N = 112 * 112;
   for(i = 0, p = 0; i < N; i++, p += 4){
@@ -130,6 +135,39 @@ async function rxEmbed(canvas, pts){
   var unit = new Float32Array(v.length);
   for(i = 0; i < v.length; i++) unit[i] = v[i] / norm;
   return unit;
+}
+
+/* A prepared face canvas + its landmarks → 512 numbers, unit length. Null if it cannot be aligned. */
+async function rxEmbed(canvas, pts){
+  if(!rxEmbState.session) throw new Error('The face-recognition model has not been loaded yet.');
+  var ctx = rxAlignedCrop(canvas, pts, '#000');
+  if(!ctx) return null;
+  return rxRunEmbed(ctx);
+}
+
+/* The same face seen through three windows — eyes, nose, mouth — one embedding each. Everything
+   outside the window is painted over, so each vector describes that feature and nothing else, and
+   the three can be compared feature by feature instead of collapsing into one number.
+
+   Three extra passes of the network is three times the work of the whole-face pass. It buys the only
+   thing the whole-face vector cannot give: an answer to "whose nose". */
+async function rxEmbedRegions(canvas, pts){
+  if(!rxEmbState.session) throw new Error('The face-recognition model has not been loaded yet.');
+  var ctx = rxAlignedCrop(canvas, pts, 'rgb(128,128,128)');
+  if(!ctx) return null;
+  var full = ctx.getImageData(0, 0, 112, 112);
+  var out = {}, names = RX_REGIONS, i;
+  for(i = 0; i < names.length; i++){
+    var win = RX_REGION_WINDOWS[names[i]];
+    ctx.putImageData(full, 0, 0);
+    ctx.fillStyle = 'rgb(128,128,128)';
+    ctx.fillRect(0, 0, 112, win[1]);
+    ctx.fillRect(0, win[3], 112, 112 - win[3]);
+    ctx.fillRect(0, win[1], win[0], win[3] - win[1]);
+    ctx.fillRect(win[2], win[1], 112 - win[2], win[3] - win[1]);
+    out[names[i]] = await rxRunEmbed(ctx);
+  }
+  return out;
 }
 
 function rxCosine(a, b){

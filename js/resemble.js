@@ -39,6 +39,43 @@ var RX_EMB_WEIGHT = 0.6;      // blend: 60% recognition model, 40% measurements.
 var RX_EMB_LO = -0.1314;      // 1st and 99th percentile of the cosine between two aligned faces,
 var RX_EMB_HI = 0.3079;       // used to put the embedding on the same 0-100 scale as the geometry.
 
+/* ---- the feature-by-feature ruler ----
+   When the per-region maps in kinmap.js are loaded, the eyes, nose and mouth rows stop being
+   landmark ratios and become network evidence about that feature, and the arithmetic above changes
+   with them. Measured on KinFaceW-I — a second dataset whose parent and child photographs were
+   taken on different days, so there is no shared lighting to exploit — the headline goes from 0.848
+   to 0.878 and picking the real parent out of a lineup of two from 85.9% to 88.7%.
+
+   These constants are separate from the two above rather than replacing them, because each set is
+   internally consistent with the null distribution measured alongside it. Mixing a scale from one
+   with a threshold from the other is how the first version of this app came to announce winners it
+   had not found.
+
+   RX_REGION_WEIGHT is 0 because the grid said so: with the network's answer for a feature in hand,
+   the landmark ratios for that same feature added nothing on top. They are still computed — they
+   are what the app falls back to when the maps do not load, they are what decides whether a feature
+   is usable at all, and an expression or a pair of sunglasses still rules a feature out through
+   them. */
+var RX_ID_WEIGHT = 0.35;      // how much of the headline is "is this the same face at all", with the
+                              // rest coming from the eight features. 0.6 without the region maps.
+var RX_ID_LO = -0.1218;       // the same 1st/99th-percentile scaling as above, re-measured over both
+var RX_ID_HI = 0.3479;        // datasets for the path that uses it.
+var RX_REGION_WEIGHT = 0;     // weight kept on the landmark measurements for a region-backed feature
+var RX_REGION_SCALE = {       // 1st and 99th percentile of each region's mapped cosine
+  eyes:  [-0.2532, 0.5318],
+  nose:  [-0.2822, 0.5776],
+  mouth: [-0.2577, 0.5511]
+};
+function rxRegionLikeness(name, cosine){
+  var s = RX_REGION_SCALE[name];
+  if(!s || typeof cosine !== 'number' || !isFinite(cosine)) return null;
+  return Math.max(0, Math.min(100, 100 * (cosine - s[0]) / (s[1] - s[0])));
+}
+function rxIdLikeness(cosine){
+  if(typeof cosine !== 'number' || !isFinite(cosine)) return null;
+  return Math.max(0, Math.min(100, 100 * (cosine - RX_ID_LO) / (RX_ID_HI - RX_ID_LO)));
+}
+
 /* ---- is this the same person twice? ----
    The obvious sanity check — compare someone with themselves — produced "a genuine mix of Dad and
    Mum" and two ordinary-looking likeness scores, because the 0-100 scale above tops out in FAMILY
@@ -98,6 +135,15 @@ var RX_SCALES = {
     clear: 19, lean: 11,
     nullGap: [{ gap: 6.0, chance: 50 }, { gap: 10.4, chance: 25 }, { gap: 15.6, chance: 10 },
               { gap: 18.7, chance: 5 }, { gap: 25.2, chance: 1 }]
+  },
+  /* The region ruler, measured the same way on KinFaceW-I: 2724 comparisons between one child and
+     two UNRELATED adults, scored exactly as the app scores them. A true parent beats a stranger by
+     19.2 points at the median — comfortably clear of the 15.4 that chance manages a quarter of the
+     time, which is the whole reason these thresholds exist. */
+  regions: {
+    clear: 27, lean: 15,
+    nullGap: [{ gap: 9.3, chance: 50 }, { gap: 15.4, chance: 25 }, { gap: 22.6, chance: 10 },
+              { gap: 27.4, chance: 5 }, { gap: 36.9, chance: 1 }]
   }
 };
 var rxScale = RX_SCALES.geometry;
@@ -144,16 +190,22 @@ var RX_MIN_COVERAGE = 0.5;
 
    Ears and hairline are still absent: a face mesh stops at the face, so they cannot be measured, and
    guessing at them would be the dishonest half of the answer. */
+/* `weight` is the measured kin signal of a feature read off the landmarks. `mapped` is the same
+   quantity when the region maps are loaded and eyes, nose and mouth are read by the network
+   instead — measured the same way, over both KinFaceW datasets. The ordering turns over again:
+   colouring, which beat every geometric measurement, is now beaten by three features the network
+   can see properly. Neither table is a judgement; both are (AUC - 0.5) x 10 on real pairs. */
 var RX_FEATURES = [
-  { key:'colour', label:'Colouring',        short:'colouring',  weight:1.30 },
-  { key:'eyes',   label:'Eyes',             short:'eyes',       weight:0.63 },
-  { key:'mouth',  label:'Mouth & lips',     short:'mouth',      weight:0.62 },
-  { key:'nose',   label:'Nose',             short:'nose',       weight:0.46 },
-  { key:'jaw',    label:'Jaw & chin',       short:'jaw',        weight:0.46 },
-  { key:'brows',  label:'Eyebrows',         short:'eyebrows',   weight:0.46 },
-  { key:'shape',  label:'Face shape',       short:'face shape', weight:0.44 },
-  { key:'cheeks', label:'Cheeks & midface', short:'cheeks',     weight:0.43 }
+  { key:'colour', label:'Colouring',        short:'colouring',  weight:1.30, mapped:1.71 },
+  { key:'eyes',   label:'Eyes',             short:'eyes',       weight:0.63, mapped:3.35 },
+  { key:'mouth',  label:'Mouth & lips',     short:'mouth',      weight:0.62, mapped:3.17 },
+  { key:'nose',   label:'Nose',             short:'nose',       weight:0.46, mapped:3.42 },
+  { key:'jaw',    label:'Jaw & chin',       short:'jaw',        weight:0.46, mapped:0.67 },
+  { key:'brows',  label:'Eyebrows',         short:'eyebrows',   weight:0.46, mapped:0.87 },
+  { key:'shape',  label:'Face shape',       short:'face shape', weight:0.44, mapped:0.83 },
+  { key:'cheeks', label:'Cheeks & midface', short:'cheeks',     weight:0.43, mapped:0.63 }
 ];
+var RX_REGION_FEATURES = ['eyes', 'nose', 'mouth'];
 var RX_FEATURE_KEYS = RX_FEATURES.map(function(f){ return f.key; });
 function rxFeature(key){ return RX_FEATURES.filter(function(f){ return f.key === key; })[0] || null; }
 
@@ -249,7 +301,33 @@ function rxMergeRounds(rounds, n){
    headline score is the blend; when absent it is the measurements alone, and the caller is expected
    to have selected the matching scale. The per-feature table is untouched either way — the
    recognition model produces one number and cannot say whose eyes anyone has. */
-function rxOverall(table, n, embScores){
+/* Fold the region evidence into the merged table, in place of the landmark rows for those three
+   features. Deliberately conservative in one way: a region score is only used where the landmark
+   measurements for that feature survived. If a grin ruled out the mouth, or a pair of sunglasses
+   ruled out the eyes, that feature stays ruled out — the network would happily read a mouth off a
+   grin or eyes off dark lenses, and measuring an occluder is the mistake this app has already made
+   once. The spread for a replaced row is 0 because the embedding does not wobble with the crop the
+   way landmarks do; it is one reading of one aligned face. */
+function rxApplyRegions(table, n, regionScores){
+  if(!regionScores) return false;
+  var used = false;
+  RX_REGION_FEATURES.forEach(function(key){
+    var slot = table.features[key], cov = table.coverage && table.coverage[key], p, v;
+    if(!slot) return;
+    for(p = 0; p < n; p++){
+      v = regionScores[p] && regionScores[p][key];
+      if(typeof v !== 'number' || !isFinite(v)) continue;
+      if(typeof slot.mean[p] !== 'number') continue;                    // not measurable: leave it
+      if(cov && cov.mean[p] !== null && cov.mean[p] < RX_MIN_COVERAGE) continue;
+      slot.mean[p] = RX_REGION_WEIGHT * slot.mean[p] + (1 - RX_REGION_WEIGHT) * v;
+      slot.spread[p] = RX_REGION_WEIGHT * slot.spread[p];
+      used = true;
+    }
+  });
+  return used;
+}
+
+function rxOverall(table, n, embScores, mapped){
   // A feature counts only if EVERY person has a score for it. If a grin made the child's mouth
   // uncomparable against one parent, that mouth cannot quietly be counted for the other parent
   // instead — the comparison has to be like for like or it is not a comparison.
@@ -272,7 +350,8 @@ function rxOverall(table, n, embScores){
       if(!usable[f.key]) continue;
       v = table.features[f.key].mean[p];
       if(typeof v !== 'number') continue;
-      vsum += v * f.weight; wsum += f.weight;
+      var w = mapped ? f.mapped : f.weight;
+      vsum += v * w; wsum += w;
     }
     raw.push(wsum ? vsum / wsum : null);
   }
@@ -281,8 +360,9 @@ function rxOverall(table, n, embScores){
     for(p = 0; p < n; p++){
       var e = embScores[p];
       if(typeof e !== 'number' || !isFinite(e)) continue;
+      var ew = mapped ? RX_ID_WEIGHT : RX_EMB_WEIGHT;
       raw[p] = (typeof raw[p] === 'number')
-        ? RX_EMB_WEIGHT * e + (1 - RX_EMB_WEIGHT) * raw[p]
+        ? ew * e + (1 - ew) * raw[p]
         : e;                       // no measurements survived: the model alone is better than nothing
     }
   }
@@ -399,6 +479,10 @@ if(typeof module !== 'undefined' && module.exports){
     RX_EMB_LO: RX_EMB_LO, RX_EMB_HI: RX_EMB_HI, RX_SAME_PERSON_COS: RX_SAME_PERSON_COS,
     rxSamePerson: rxSamePerson, rxIdentityGroup: rxIdentityGroup, rxUseScale: rxUseScale,
     rxEmbLikeness: rxEmbLikeness,
+    RX_ID_WEIGHT: RX_ID_WEIGHT, RX_ID_LO: RX_ID_LO, RX_ID_HI: RX_ID_HI,
+    RX_REGION_WEIGHT: RX_REGION_WEIGHT, RX_REGION_SCALE: RX_REGION_SCALE,
+    RX_REGION_FEATURES: RX_REGION_FEATURES,
+    rxRegionLikeness: rxRegionLikeness, rxIdLikeness: rxIdLikeness, rxApplyRegions: rxApplyRegions,
     rxChanceOf: rxChanceOf,
     rxFeature: rxFeature, rxAttributed: rxAttributed,
     rxRollUp: rxRollUp, rxCoverage: rxCoverage, rxRound: rxRound, rxMergeRounds: rxMergeRounds,

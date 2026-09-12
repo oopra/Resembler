@@ -382,7 +382,7 @@ test('no two shipped scripts define the same global', () => {
   // `rxCompare` button handler once ate measure.js's `rxCompare(child, adult)` and turned every
   // comparison into nulls. Cheap to check, so it is checked.
   const dir = new URL('../js/', import.meta.url);
-  const files = ['faces.js', 'measure.js', 'mesh.js', 'resemble.js', 'app.js'];
+  const files = ['faces.js', 'measure.js', 'mesh.js', 'resemble.js', 'kinmap.js', 'app.js'];
   const owner = new Map();
   const clashes = [];
   for (const f of files) {
@@ -759,4 +759,130 @@ test('rxRollUp: a rare match moves a feature more than an ordinary one', () => {
   const noseOrd = M.RX_MEASURES.filter((m) => m.feature === 'nose').reduce((s, m) => s + wOrd[m.key], 0);
   const noseRare = M.RX_MEASURES.filter((m) => m.feature === 'nose').reduce((s, m) => s + wRare[m.key], 0);
   assert.ok(noseRare > noseOrd * 2, 'the striking nose carries far more of the verdict');
+});
+
+/* ---- the per-feature adult→child maps ---- */
+
+const K = require('../js/kinmap.js');
+const KINMAP = K.rxParseKinmap((() => {
+  const b = readFileSync(new URL('../models/kinmap.bin', import.meta.url));
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+})());
+
+test('the shipped feature maps parse to the shape the app expects', () => {
+  assert.ok(KINMAP, 'models/kinmap.bin did not parse');
+  assert.equal(KINMAP.D, 512, 'the maps must match the embedding width the model produces');
+  for (const name of K.RX_REGIONS) {
+    assert.ok(KINMAP[name], `no map for ${name}`);
+    assert.equal(KINMAP[name].mu.length, KINMAP.D);
+    assert.equal(KINMAP[name].comps.length, KINMAP.P);
+    assert.equal(KINMAP[name].comps[0].length, KINMAP.D);
+    assert.equal(KINMAP[name].W.length, KINMAP.P);
+    assert.equal(KINMAP[name].W[0].length, KINMAP.P);
+  }
+});
+
+test('a truncated or mislabelled map file is refused rather than half-read', () => {
+  const good = readFileSync(new URL('../models/kinmap.bin', import.meta.url));
+  const short = good.subarray(0, good.length - 4);
+  assert.equal(K.rxParseKinmap(short.buffer.slice(short.byteOffset, short.byteOffset + short.byteLength)), null,
+    'a file missing its last floats must not be used as if it were whole');
+  const wrong = Buffer.from(good);
+  wrong.write('NOPE', 0, 'ascii');
+  assert.equal(K.rxParseKinmap(wrong.buffer.slice(wrong.byteOffset, wrong.byteOffset + wrong.byteLength)), null);
+});
+
+// A deterministic stand-in for a region embedding: unit length, 512 wide, like the real thing.
+function fakeVec(seed) {
+  let s = seed >>> 0;
+  const rnd = () => ((s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff) / 0x7fffffff);
+  const v = [];
+  for (let i = 0; i < 512; i++) v.push(rnd() * 2 - 1);
+  let n = 0; for (const x of v) n += x * x;
+  n = Math.sqrt(n) || 1;
+  return Float32Array.from(v.map((x) => x / n));
+}
+
+test('the map runs adult→child, and is not the same comparison reversed', () => {
+  const adult = fakeVec(11), child = fakeVec(22);
+  const forward = K.rxRegionCosine(KINMAP, 'nose', adult, child);
+  const backward = K.rxRegionCosine(KINMAP, 'nose', child, adult);
+  assert.ok(typeof forward === 'number' && isFinite(forward));
+  assert.ok(Math.abs(forward - backward) > 1e-6,
+    'if swapping the two faces gave the same number the map would not be doing anything directional');
+});
+
+test('a face compared with itself still comes out top of its own region scale', () => {
+  const v = fakeVec(7);
+  const self = K.rxRegionCosine(KINMAP, 'eyes', v, v);
+  const other = K.rxRegionCosine(KINMAP, 'eyes', v, fakeVec(8));
+  assert.ok(self > other, 'the mapped comparison must still rank an identical face above a different one');
+});
+
+test('a region cosine lands on the 0-100 scale, and an unusable one stays null', () => {
+  assert.equal(R.rxRegionLikeness('nose', null), null);
+  assert.equal(R.rxRegionLikeness('ears', 0.5), null, 'only the three fitted regions have a scale');
+  assert.equal(R.rxRegionLikeness('nose', -99), 0, 'clamped, not negative');
+  assert.equal(R.rxRegionLikeness('nose', 99), 100);
+  const mid = R.rxRegionLikeness('nose', (R.RX_REGION_SCALE.nose[0] + R.RX_REGION_SCALE.nose[1]) / 2);
+  assert.ok(Math.abs(mid - 50) < 0.001, 'the middle of the measured range is the middle of the scale');
+});
+
+test('region scores replace the three rows they were fitted for, and nothing else', () => {
+  const table = R.rxMergeRounds([R.rxRound(VA, [VA, VB], null)], 2);
+  const before = {};
+  for (const f of R.RX_FEATURES) before[f.key] = table.features[f.key].mean.slice();
+  const used = R.rxApplyRegions(table, 2, [{ eyes: 10, nose: 10, mouth: 10 }, { eyes: 90, nose: 90, mouth: 90 }]);
+  assert.equal(used, true);
+  for (const f of R.RX_FEATURES) {
+    if (R.RX_REGION_FEATURES.includes(f.key)) {
+      assert.notDeepEqual(table.features[f.key].mean, before[f.key], `${f.key} should now be the network's answer`);
+    } else {
+      assert.deepEqual(table.features[f.key].mean, before[f.key], `${f.key} has no map and must be left alone`);
+    }
+  }
+  assert.equal(table.features.nose.mean[1], 90);
+});
+
+test('a feature ruled out by an occluder is not quietly rescued by the network', () => {
+  // Sunglasses knock out the eye measurements. The network would happily read "eyes" off the
+  // lenses — measuring an invention is the mistake this app has already made once, so a feature
+  // that the measurements could not reach stays unreached.
+  const blocked = {};
+  for (const m of M.RX_MEASURES) if (m.feature === 'eyes') blocked[m.key] = true;
+  const table = R.rxMergeRounds([R.rxRound(VA, [VA, VB], [blocked, blocked])], 2);
+  R.rxApplyRegions(table, 2, [{ eyes: 95, nose: 50, mouth: 50 }, { eyes: 5, nose: 50, mouth: 50 }]);
+  assert.equal(table.features.eyes.mean[0], null, 'a blocked feature must stay blocked');
+  assert.equal(table.features.eyes.mean[1], null);
+  assert.ok(typeof table.features.nose.mean[0] === 'number', 'the features that were readable still get mapped');
+});
+
+test('the headline uses the weights that match the evidence it was given', () => {
+  // With the maps in play the eyes, nose and mouth rows are network evidence and carry the weights
+  // measured for that; without them they are landmark ratios and carry the older ones. Scoring one
+  // with the other's table is the same class of mistake as reading a gap off the wrong null.
+  const table = R.rxMergeRounds([R.rxRound(VA, [VA, VB], null)], 2);
+  const plain = R.rxOverall(table, 2, null, false);
+  const asMapped = R.rxOverall(table, 2, null, true);
+  assert.ok(typeof plain.raw[1] === 'number' && typeof asMapped.raw[1] === 'number');
+  assert.notEqual(Math.round(plain.raw[1] * 100), Math.round(asMapped.raw[1] * 100),
+    'the two weight tables must actually differ in effect');
+  for (const f of R.RX_FEATURES) {
+    assert.ok(typeof f.mapped === 'number' && f.mapped > 0, `${f.key} has no measured mapped weight`);
+  }
+});
+
+test('the region ruler has its own measured null, and it is stricter than the geometry one', () => {
+  const g = R.RX_SCALES.regions;
+  assert.ok(g, 'there is no region scale');
+  assert.ok(g.clear > g.lean, 'a clear lead must be a bigger gap than a lean');
+  // The thresholds are the null: "leans" beats three quarters of chance gaps, "takes after" 95%.
+  const quarter = g.nullGap.find((x) => x.chance === 25).gap;
+  const five = g.nullGap.find((x) => x.chance === 5).gap;
+  assert.ok(Math.abs(g.lean - quarter) <= 1, 'the lean threshold must track the measured 75th percentile');
+  assert.ok(Math.abs(g.clear - five) <= 1, 'the clear threshold must track the measured 95th percentile');
+  for (let i = 1; i < g.nullGap.length; i++) {
+    assert.ok(g.nullGap[i].gap > g.nullGap[i - 1].gap, 'the null table must be ordered');
+    assert.ok(g.nullGap[i].chance < g.nullGap[i - 1].chance);
+  }
 });

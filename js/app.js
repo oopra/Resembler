@@ -219,6 +219,7 @@ async function rxEnsureMesh(){
    picture. If it will not load (an old browser, a failed download) the app carries on with the
    measurements alone, on their own calibration, and says so. */
 var rxEmbeddingReady = false;
+var rxMapsReady = false;
 async function rxEnsureEmbedder(){
   if(rxEmbeddingReady) return true;
   try{
@@ -230,6 +231,20 @@ async function rxEnsureEmbedder(){
     rxEmbeddingReady = true;
   }catch(e){
     rxEmbeddingReady = false;
+  }
+  // The feature maps are a separate, much smaller download, and a separate failure: without them the
+  // app still compares, on the whole-face embedding and the measurements, at its older accuracy.
+  if(rxEmbeddingReady && !rxMapsReady){
+    try{
+      await rxLoadKinmap(function(frac, label){
+        if(frac >= 1){ rxStatus(''); rxProgress(-1); return; }
+        if(label) rxStatus(label);
+        rxProgress(frac);
+      });
+      rxMapsReady = true;
+    }catch(e){
+      rxMapsReady = false;
+    }
   }
   return rxEmbeddingReady;
 }
@@ -393,7 +408,7 @@ function rxProgress(frac){
 
 /* Read one face once: crop it (at this reading's jitter), find the mesh in the crop, measure it, and
    sample its colours off the same pixels that were measured. */
-async function rxReadFace(card, jitter){
+async function rxReadFace(card, jitter, jitterOnly){
   var frame = rxClampFrame({ cx: card.frame.cx, cy: card.frame.cy, size: card.frame.size * jitter,
                              angle: card.frame.angle }, card.dims.w, card.dims.h);
   var out = rxRenderFace(card.src, frame, {});
@@ -407,11 +422,17 @@ async function rxReadFace(card, jitter){
   if(!vals) return { ok: false, why: 'noface', prepared: out };
   var colours = rxSampleColours(out.canvas, got.pts);
   Object.keys(colours).forEach(function(k){ vals[k] = colours[k]; });
-  var vec = null;
+  var vec = null, regions = null;
   if(rxEmbeddingReady){
     try{ vec = await rxEmbed(out.canvas, got.pts); }catch(e){ vec = null; }
   }
-  return { ok: true, vals: vals, vec: vec, blend: got.blend, pose: got.pose, faces: got.faces, prepared: out };
+  // Only on the first, true-crop reading: the region vectors do not move with the crop the way
+  // landmarks do, so re-reading them three more times per photo would buy noise, not honesty.
+  if(rxMapsReady && !jitterOnly){
+    try{ regions = await rxEmbedRegions(out.canvas, got.pts); }catch(e){ regions = null; }
+  }
+  return { ok: true, vals: vals, vec: vec, regions: regions, blend: got.blend, pose: got.pose,
+           faces: got.faces, prepared: out };
 }
 
 async function rxRunComparison(){
@@ -430,7 +451,7 @@ async function rxRunComparison(){
     // mesh cannot find a face in is reported and set aside, rather than being carried through as a
     // row of blanks that drag on everyone else's scores.
     await rxEnsureEmbedder();
-    rxUseScale(rxEmbeddingReady ? 'blend' : 'geometry');
+    rxUseScale(rxEmbeddingReady ? 'blend' : 'geometry');   // re-settled in rxShowResults
     rxStatus('Measuring…');
     await rxYield();
 
@@ -472,9 +493,9 @@ async function rxRunComparison(){
       rxStatus('Measuring… reading ' + (k + 1) + ' of ' + passes);
       await rxYield();
       var jitter = RX_JITTER[k % RX_JITTER.length];
-      var again = await rxReadFace(rxChild, jitter);
+      var again = await rxReadFace(rxChild, jitter, true);
       var others = [];
-      for(var oi = 0; oi < people.length; oi++) others.push(await rxReadFace(people[oi], jitter));
+      for(var oi = 0; oi < people.length; oi++) others.push(await rxReadFace(people[oi], jitter, true));
       if(!again.ok || others.some(function(r){ return !r.ok; })) continue;   // a wobbly re-crop is not a failure
       rounds.push(rxRound(again.vals, others.map(function(r){ return r.vals; }),
                           others.map(function(r, i2){
@@ -502,9 +523,28 @@ async function rxRunComparison(){
       sameAs = rxIdentityGroup(matrix).slice(1);
     }
 
+    // Feature by feature: the child's eyes against each candidate's eyes, and the same for nose and
+    // mouth, with each candidate's region first mapped from adult space into child space. This is
+    // the part that can say WHOSE nose, which the whole-face vector cannot.
+    var regionScores = null;
+    if(rxMapsReady && childRead.regions){
+      regionScores = keep.map(function(i){
+        var them = firstReads[i].regions;
+        if(!them) return null;
+        var row = {}, any = false;
+        RX_REGIONS.forEach(function(name){
+          var v = rxRegionLikeness(name, rxRegionCosine(rxKinmapState.maps, name, them[name], childRead.regions[name]));
+          if(typeof v === 'number'){ row[name] = v; any = true; }
+        });
+        return any ? row : null;
+      });
+      if(!regionScores.some(function(r){ return r; })) regionScores = null;
+    }
+
     rxStatus('');
     rxShowResults({ people: people, names: names, prepared: prepared, childPrepared: childPrepared,
                     embScores: embScores, embeddingUsed: !!embScores, sameAs: sameAs,
+                    regionScores: regionScores,
                     // The count reported is the number of readings that actually landed, not the
                     // number asked for: a re-crop the mesh could not read is skipped, and saying
                     // "3 readings" over 2 would be a small lie in the app's own provenance line.
@@ -563,7 +603,16 @@ function rxExpressionNotes(childBlend, reads, names, blocked){
 function rxShowResults(run){
   var n = run.people.length;
   var table = rxMergeRounds(run.rounds, n);
-  var overall = rxOverall(table, n, run.embScores);
+  // The eyes, nose and mouth rows become the network's answer for those features where it has one;
+  // everything downstream — the per-feature calls, the mix, the caveats — then reads the better
+  // number without knowing anything changed.
+  var mapped = rxApplyRegions(table, n, run.regionScores);
+  // The ruler is settled here, not when the maps finished downloading: loading the maps is not the
+  // same as having used them, and a photo whose mouth was ruled out is scored on the ruler that was
+  // actually applied to it.
+  rxUseScale(mapped ? 'regions' : (run.embeddingUsed ? 'blend' : 'geometry'));
+  run.mapped = mapped;
+  var overall = rxOverall(table, n, run.embScores, mapped);
   var calls = rxAllCalls(table, n);
   var verdict = rxVerdict(overall, calls, run.rounds, n);
   rxLastRun = { run: run, table: table, overall: overall, calls: calls, verdict: verdict };
@@ -576,7 +625,8 @@ function rxShowResults(run){
 
   document.getElementById('provenance').textContent =
     run.passes + (run.passes === 1 ? ' reading' : ' readings, each from a slightly different crop') +
-    (run.embeddingUsed ? ' · face-recognition model + measurements (60/40)' : ' · measurements only') +
+    (run.mapped ? ' · eyes, nose and mouth read by the recognition model; the rest measured'
+                : (run.embeddingUsed ? ' · face-recognition model + measurements (60/40)' : ' · measurements only')) +
     ' · all on this device · nothing was uploaded';
 
   var res = document.getElementById('results');
@@ -739,9 +789,14 @@ function rxRenderFeatures(run, table, calls){
   if(!identity && run.embeddingUsed){
     var note = document.createElement('p');
     note.className = 'ftable-note';
-    note.textContent = 'The verdict above mostly comes from a face-recognition model, which produces ' +
-      'a single number. The breakdown below is the measurements — it is where "whose eyes" comes from, ' +
-      'and it can disagree with the headline.';
+    note.textContent = run.mapped
+      ? 'Eyes, nose and mouth below are read by the recognition model, one window on the face at a ' +
+        'time, with each grown-up face first mapped towards how a child of theirs would look. The ' +
+        'other four rows are the measurements. Both feed the verdict, so the breakdown can still ' +
+        'disagree with the headline — but it is no longer a weaker kind of evidence.'
+      : 'The verdict above mostly comes from a face-recognition model, which produces ' +
+        'a single number. The breakdown below is the measurements — it is where "whose eyes" comes from, ' +
+        'and it can disagree with the headline.';
     host.appendChild(note);
   }
   calls.forEach(function(call){
@@ -780,7 +835,12 @@ function rxRenderFeatures(run, table, calls){
       if(note){
         var p = document.createElement('p');
         p.className = 'fnote';
-        p.textContent = run.names[call.winner] + ': ' + note + '.';
+        // On a row the recognition model decided, the landmark measurements did NOT produce the bar
+        // above, so the note says so rather than posing as an explanation of it. They are still
+        // worth showing: they are the part of this a person can check by looking.
+        p.textContent = (run.mapped && RX_REGION_FEATURES.indexOf(call.key) >= 0)
+          ? 'Measured separately, ' + run.names[call.winner] + ' is ' + note + '.'
+          : run.names[call.winner] + ': ' + note + '.';
         row.appendChild(p);
       }
     }

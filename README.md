@@ -16,14 +16,17 @@ A static site. No build step, no framework, no bundler.
 
 ## What it can and cannot do
 
-Benchmarked on 836 real parent/child pairs, running the shipped code end to end, it separates kin
-from strangers with an **AUC of 0.851** — up from 0.720 before a face-recognition network was added
-alongside the measurements. It **cannot reliably tell which of two parents a child takes after**: true
-pairs score 51.7 against strangers' 44.7, a 7-point separation with ~8 points of spread, and telling
-one parent from another (both of whom are kin) is a far finer distinction than that. It will now say
-"too close to call" often, because that is usually the true answer. The full study, including two of
-my own hypotheses that turned out to be wrong, is in
-**[tools/README-calibration.md](tools/README-calibration.md)**.
+Benchmarked on 458 real parent/child pairs from a dataset it was never fitted on — and whose parent
+and child photographs were taken on different days, so there is no shared lighting to flatter it —
+the shipped code separates kin from strangers with an **AUC of 0.878**, and picks the real parent out
+of a lineup of two **88.7%** of the time. Before a face-recognition network was added it was 0.720;
+before each feature was read separately it was 0.848.
+
+It still **cannot reliably tell which of two parents a child takes after**. Telling one parent from
+another — both of whom are kin — is a far finer distinction than telling kin from strangers, and it
+will say "too close to call" often, because that is usually the true answer. The full study,
+including three of my own hypotheses that turned out to be wrong and one selection mistake that
+nearly shipped, is in **[tools/README-calibration.md](tools/README-calibration.md)**.
 
 ## The honest bit, first
 
@@ -58,23 +61,38 @@ percentage — reads as far more authoritative than it has any right to.
 No beautifying, no smoothing, no background removal, no recognition, no matching against any
 database. "Find the head, hold it still, even out the light" is the whole of it.
 
-### 2. Measure it, and recognise it
+### 2. Measure it, recognise it, and look at one feature at a time
 
-Two things look at every face, and the verdict is 60% the first and 40% the second:
+Three things look at every face:
 
 **A face-recognition network** (`js/embed.js`) — InsightFace's buffalo_s, a MobileFaceNet trained on
 WebFace600K, 13.6 MB of ONNX run through ONNX Runtime Web, entirely on your device. It turns an
 aligned face into 512 numbers and compares two faces by the cosine between them. On its own it beats
-the measurements decisively (0.845 vs 0.734 held-out). It produces one number and cannot tell you
-whose eyes a child has, which is why the measurements stay.
+the measurements decisively (0.845 vs 0.734 held-out). Run over the whole face it produces one number
+and cannot tell you whose eyes a child has.
+
+**The same network, run again through three windows** (`js/kinmap.js`) — once over the eyes, once
+over the nose, once over the mouth, with everything outside the window painted out. Each window gives
+its own 512 numbers, and before they are compared the grown-up's are passed through a small map
+fitted on a thousand real parent/child pairs, which moves an adult face towards how a child of theirs
+would look. That is the tractable core of "make the baby first, then compare" — with no generator, so
+none of a generator's inventions can be mistaken for family resemblance.
+
+This is what lets the app answer *whose nose*, and it is measurably better at it: on unseen
+different-photo pairs, nose 0.772 → 0.798, mouth 0.701 → 0.742, eyes 0.773 → 0.795. Mapping the
+**whole** face the same way makes it worse (0.839 → 0.816), which is the finding in one line: an
+adult-to-child map helps a feature and hurts a face.
 
 **The measurements** (`js/measure.js`) — described below. They contribute what the network throws
 away: recognition models are trained to be robust to lighting, so they largely discard colour, and
-colour is the strongest family signal the measurements have. Blended, the two reach 0.868 held-out,
-better than either alone.
+colour is the strongest family signal the measurements have. They also decide whether a feature can
+be read at all — a mouth pulled into a grin, or eyes behind sunglasses, is ruled out by the
+measurements and then stays ruled out for the network too, which would otherwise happily read a
+mouth off the grin.
 
-If the network cannot load, the app falls back to the measurements alone, switches to their own
-calibration, and says so under the result.
+If the maps cannot load, the app falls back to the whole-face network blended 60/40 with the
+measurements; if the network cannot load either, to the measurements alone. Each of the three
+arrangements carries its own separately measured thresholds, and the result says which one it used.
 
 ### 2b. What gets measured
 
@@ -183,6 +201,7 @@ measured, and guessing at them would be the dishonest half of the answer.
 | `vendor/mediapipe/vision_bundle.mjs` | MediaPipe Tasks Vision 1.0.1 (Apache-2.0) | 152 KB |
 | `vendor/mediapipe/wasm/` | its WebAssembly runtime, SIMD build only | ~12 MB |
 | `models/face_landmarker.task` | the face landmarker model, float16 (Apache-2.0) | 3.6 MB |
+| `models/kinmap.bin` | the three per-feature adult→child maps, fitted here | 438 KB |
 
 That is a real download, once. The app is honest about it: the first comparison shows a progress bar
 with the size on it rather than a spinner, and the service worker caches those two files
@@ -279,6 +298,7 @@ css/styles.css             one stylesheet, no framework, no web fonts
 js/faces.js                decode · frame · level · normalise · quality-check
 js/measure.js              478 landmarks → ~35 measurements → a score per feature   (pure)
 js/mesh.js                 loads and runs the face mesh; samples skin and eye colour
+js/kinmap.js               per-feature adult→child maps: whose nose, not just how alike
 js/resemble.js             measurements → features → a verdict                      (pure)
 js/app.js                  cards, dragging, the run, the results
 sw.js                      caches the mesh so 16 MB is downloaded once
