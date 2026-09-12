@@ -324,6 +324,51 @@ three regions score 0.605 (upper), 0.591 (middle), 0.620 (lower) — indistingui
 apparent upper-face advantage was entirely eye colour sitting in the upper group. Whatever the
 network finds around the eyes, thirty-five ratios do not capture it.
 
+### Making a baby version of the adult first — tested, no gain
+
+An appealing idea: a child's face differs from *any* adult's in systematic ways, so child-vs-adult is
+never a like-for-like comparison. De-age the parent first — or generate the baby they would have —
+and then compare.
+
+The age offset is real and measurable. In embedding space there is a consistent "growing up"
+direction (mean adult minus mean child, length 0.206 in a unit-normalised 512-d space). In the
+measurements it shows up as children having a relatively narrower nostril spread (+0.65 population
+sd), wider forehead (−0.54), wider cheeks (−0.44) and a rounder face (−0.40).
+
+Subtracting it does nothing. Estimating the direction on a training half and evaluating on the
+held-out half:
+
+| | AUC |
+| --- | --- |
+| embedding, no correction | 0.8174 |
+| embedding, de-aged | 0.8207 — **+0.0034, 95% CI [−0.0014, +0.0106], inside noise** |
+| measurements, no correction | 0.7483 |
+| measurements, de-aged | 0.7504 |
+
+**Why it cannot help, and the reason is worth keeping.** Every candidate is an adult being compared
+with the same child, so a systematic child-versus-adult offset shifts *everyone's* score by roughly
+the same amount and cancels in the ranking. Removing it removes something that was already cancelling.
+(The same argument explained the sex-bias result earlier: a pull that applies to all candidates
+equally is not a bias in the answer.)
+
+A correction could only pay if the age effect **interacted with identity** — if growing up moved
+different faces differently in ways that matter. A linear direction cannot capture that. A generative
+de-ageing model could, in principle, and that is the honest case for the idea.
+
+**What stops it being built here.** Three things, in order of severity:
+
+1. **It hallucinates.** A generator asked for "this man's baby" fills everything it does not know
+   from its training prior. The output would then be compared against a real child, and the
+   generator's inventions would read as resemblance or its absence. That is the same failure as
+   measuring iris positions painted on sunglasses, with a prettier interface.
+2. **There is no ground truth to validate it against.** "Which parent does she take after" is not a
+   labelled quantity. A generated baby can be *scored* — is the real child closer to it than to a
+   random child — but that tests the generator, not the verdict.
+3. **Size.** A useful generative face model is one to two orders of magnitude larger than the 41 MB
+   this app already asks for, and would have to run on a phone.
+
+The ceiling argument above suggests the payoff would be small even if all three were solved.
+
 ### What was not tested, and matters
 
 Human resemblance judgements are badly contaminated by context — people told a child is a man's son
