@@ -461,6 +461,69 @@ The generative version of this idea — actually rendering the baby and comparin
 unbuilt, for the three reasons above. What is shipped is the part of it that can be validated: no
 pixels are invented, so nothing invented can be mistaken for a resemblance.
 
+### Guessing each photo's age and rebasing them all to one age — tested, it costs accuracy
+
+A sharper version of the de-ageing idea, and it defeats the argument that killed the first one:
+estimate the age in each photograph, then move every face to one baseline age before comparing. The
+cancellation argument does not cover this. If Mum is guessed at 32 and Dad at 55, rebasing moves them
+by different amounts, and that difference lands directly on the answer rather than cancelling out.
+So it had to be measured rather than reasoned about.
+
+InsightFace's `genderage` head, run over both datasets through the app's own pipeline.
+
+**First, a preprocessing mistake worth recording**, because it nearly produced a confident wrong
+answer. The attribute head does not take the tight five-point crop the recognition model takes; it
+takes the detector's box with `max(w,h) × 1.5` mapped to the input square — a looser frame including
+hair and jawline, which is where much of the age signal is. Fed the recognition crop, every estimate
+was squashed towards the middle (parents 29.6, children 25.9). With the model's own framing:
+
+| | parent | child | parent guessed older | median gap |
+| --- | --- | --- | --- | --- |
+| KinFaceW-II | 39.6 ± 12.7 | 31.9 ± 8.9 | 72.8% | 5.2 yrs |
+| KinFaceW-I | 39.2 ± 10.5 | 33.4 ± 7.5 | 66.8% | 5.6 yrs |
+
+A generation apart is 25–30 years. The estimator reads 5, and gets the *direction* right barely two
+times in three. Then rebasing, on KinFaceW-I, against the shipped 0.8776:
+
+| rebased to | strength 0.5 | strength 1 |
+| --- | --- | --- |
+| age 8 | 0.8717 (−0.0059) | 0.8625 (−0.0151) |
+| age 20 | 0.8741 (−0.0035) | 0.8690 (−0.0086) |
+| age 35 | 0.8763 (−0.0012) | 0.8749 (−0.0027) |
+
+Every one negative, and worse the further each face is moved. **And it fails hardest exactly where
+the argument said it should help**: restricted to the third of comparisons where the true parent and
+the stranger differ most in guessed age (13+ years, median 20), rebasing to age 8 costs −0.0195
+[−0.0245, −0.0144]. The case that cancellation cannot explain away is the case that degrades most,
+which is the signature of a correction injecting noise rather than removing a confound.
+
+**Is the weak estimator to blame? No — tested.** Give it a *perfect* age signal: KinFaceW labels who
+is the parent and who is the child, so set every child to 8, every adult to 38, fit the per-year
+direction on those, and rebase.
+
+| | AUC | change |
+| --- | --- | --- |
+| as shipped | 0.8776 | |
+| rebased to 8, full strength | 0.8726 | −0.0050 [−0.0074, −0.0004] |
+| rebased to 20, full strength | 0.8761 | −0.0015 [−0.0033, +0.0018] |
+| rebased to 38, full strength | 0.8789 | +0.0014 [−0.0016, +0.0043] |
+
+Flawless age knowledge buys nothing. So the estimator is not what is wrong with the idea.
+
+**Why a shift cannot work even with perfect ages, while a map can.** Moving a face along a direction
+removes the *average* effect of age and nothing else, and every shift carries its own error straight
+into the comparison — the distance between two faces is changed by the full size of the shift, not by
+the part of it that was correct. What ships instead does not estimate anyone's age at all: the
+per-feature maps in `models/kinmap.bin` were fitted on real parent/child pairs, so they absorb the
+average age change as a side effect and, unlike a shift, can move different faces differently. The
+same idea, in the shape that survives contact with the data.
+
+**One fact worth keeping, though.** The benchmark faces are 64×64 crops, and that really is the hard
+case for reading age. Putting the same full-resolution portrait through a 64×64 round trip moves the
+estimate by **13.3 years on average** (n=13, mean signed shift −7.9). Reading age off a good
+photograph is genuinely easier than these numbers suggest — it just does not help here, because the
+perfect-label control above is the ceiling, and the ceiling is zero.
+
 ### What was not tested, and matters
 
 Human resemblance judgements are badly contaminated by context — people told a child is a man's son
@@ -473,6 +536,8 @@ chance: the number is there to resist the same pull.
 The scripts live in the session that produced this, not in the repo, because they depend on a dataset
 that cannot be redistributed. The method is small enough to restate exactly:
 
+0. For the age-rebasing test, add InsightFace's `genderage` head — and crop for it the way it expects
+   (detector box, `max(w,h) × 1.5` into a 96×96 square), not the way the recognition model expects.
 1. Download and unzip KinFaceW-II.
 2. For every image, run the app's own pipeline: `rxRenderFace` over the whole crop, `rxDetect`,
    `rxMeasure`, `rxSampleColours` — both raw and after grey-world white balance.
