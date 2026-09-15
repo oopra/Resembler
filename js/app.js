@@ -17,6 +17,7 @@
      on it. */
 
 var RX_PREVIEW_PX = 260;
+var RX_RECHECK_MS = 250;      // settle time before the framed crop is looked at again
 var RX_MAX_PEOPLE = 6;
 var RX_NAME_IDEAS = ['Mum', 'Dad', 'Grandma', 'Grandad', 'Auntie', 'Uncle'];
 var RX_TONES = ['tone-a', 'tone-b', 'tone-c', 'tone-d', 'tone-e', 'tone-f'];
@@ -302,7 +303,40 @@ function rxPreview(card){
     card.quality = out.quality;
     rxShowWarnings(card);
     rxRememberCard(card);
+    rxRecheckFrame(card);
   });
+}
+
+/* Look again at the crop the comparison will actually measure.
+
+   This exists because of a photograph the app refused. The card said "No face found here. Frame the
+   head by hand" — and framing it by hand changed nothing, because the verdict came from a search of
+   the WHOLE photograph done once when the picture was loaded, and nothing ever looked again. The
+   advice the app gave could not fix the state the app was in, and the face was perfectly findable
+   inside the square the whole time.
+
+   So the readiness verdict is now taken from the same crop the measurements are taken from, at the
+   same size, re-run whenever the frame moves. Anything the crop can be read from is reported as
+   readable, whatever the first look at the whole photograph made of it. */
+function rxRecheckFrame(card){
+  if(!rxMeshState.landmarker || !card.src || !card.frame) return;   // nothing loaded: leave the first answer alone
+  if(card.recheck) clearTimeout(card.recheck);
+  // Dragging the square fires this continuously; only the crop it comes to rest on is worth a pass.
+  card.recheck = setTimeout(function(){
+    card.recheck = 0;
+    if(!card.src || !card.frame) return;
+    var key = [card.frame.cx, card.frame.cy, card.frame.size, card.frame.angle].join(',');
+    if(key === card.recheckedAt) return;
+    card.recheckedAt = key;
+    var got = null;
+    try{
+      got = rxDetect(rxRenderFace(card.src, card.frame, {}).canvas);
+    }catch(e){ return; }
+    var was = card.faces;
+    if(got){ card.faces = got.faces; card.pose = got.pose; card.eyes = got.eyes; }
+    else card.faces = 0;
+    if(card.faces !== was || got) rxShowWarnings(card);
+  }, RX_RECHECK_MS);
 }
 
 /* Every photo gets a verdict of its own, on the card, before you ever press Compare — because
@@ -312,7 +346,8 @@ function rxShowWarnings(card){
   var stop = [], warn = [];
 
   if(card.src && card.faces === 0)
-    stop.push('No face found here. Frame the head by hand, or use a clearer, straight-on photo.');
+    stop.push('No face found inside the square. Drag or zoom it onto the head — the verdict here is ' +
+              're-checked against whatever the square holds — or use a clearer, straight-on photo.');
   if(card.eyes && card.eyes.covered)
     stop.push('Both eyes must be visible — these look covered by sunglasses, a brim or deep shadow. ' +
               'Everything is measured relative to the gap between the pupils, so nothing here can be measured.');

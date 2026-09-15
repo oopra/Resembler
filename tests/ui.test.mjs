@@ -848,3 +848,79 @@ test('without the feature maps the app still compares, on the older ruler', asyn
   assert.ok(r.raw.every((v) => typeof v === 'number'));
   assert.ok(r.lead.length > 0);
 });
+
+/* ---------- a face the app refused ---------- */
+
+test('a face too small for one look at the whole photo is found by looking again, zoomed', async () => {
+  // MediaPipe needs a face to be roughly a fifth of the frame. A real photograph the app refused was
+  // findable at every size down to 80 px across, and missed only when it filled a fifth of the
+  // width — so the fix is to look again at the middle, not to tell the user to do it by hand.
+  const r = await page.evaluate((fx) => {
+    let calls = 0;
+    const seen = [];
+    window.rxDetect = function (canvas) {
+      seen.push([canvas.width, canvas.height]);
+      calls++;
+      if (calls === 1) return null;                      // the whole photo: too small to find
+      // the middle half: a face sitting in the top-left area of that window
+      const pts = fx.pts.map((p) => [0.1 + p[0] * 0.2, 0.1 + p[1] * 0.2, p[2] || 0]);
+      return { pts, blend: {}, pose: { yaw: 0, pitch: 0, roll: 0 }, faces: 1,
+               eyes: { contrast: 0.5, eyeVsCheek: 0.9, covered: false } };
+    };
+    const src = document.createElement('canvas');
+    src.width = 4000; src.height = 4000;
+    return rxAutoFrameFromMesh(src).then((got) => ({ got, calls, seen }));
+  }, A);
+  assert.ok(r.got, 'the second look must find what the first missed');
+  assert.equal(r.calls, 2, 'and it must not have needed a third');
+  // The window searched was the middle half, so a face at 0.1-0.3 of THAT window sits at 0.3-0.4 of
+  // the photograph. Reporting the window coordinates instead would put the crop in the wrong place.
+  assert.ok(r.got.frame.cx > 4000 * 0.30 && r.got.frame.cx < 4000 * 0.42,
+    `frame centre ${r.got.frame.cx} is not where that face actually is in the photograph`);
+  assert.ok(r.got.frame.cy > 4000 * 0.26 && r.got.frame.cy < 4000 * 0.42);
+});
+
+test('framing by hand clears a "no face" verdict, instead of the advice being unfollowable', async () => {
+  // The bug this covers: the card said "No face found here. Frame the head by hand", and framing it
+  // by hand changed nothing, because the verdict came from one search of the whole photograph made
+  // when the picture loaded and nothing ever looked again.
+  await stubMesh(page, [A]);
+  await page.evaluate(() => { window.rxAutoFrameFromMesh = async () => null; });   // the first look fails
+  await addPhoto(page, '#childSlots .file', 1);
+  const before = await page.evaluate(() => ({
+    ready: document.querySelector('#childSlots .ready').textContent,
+    warn: document.querySelector('#childSlots .warn').textContent,
+    faces: rxChild.faces
+  }));
+  assert.equal(before.ready, 'Cannot be compared');
+  assert.equal(before.faces, 0);
+  assert.match(before.warn, /No face found inside the square/);
+
+  // Now the mesh is available and the crop does contain a face — which is the situation the user was
+  // actually in, since the comparison reads the crop and would have found it.
+  await page.evaluate(() => { window.rxMeshState.landmarker = {}; rxZoomTo(rxChild, 60); });
+  await page.waitForFunction(() => document.querySelector('#childSlots .ready').textContent !== 'Cannot be compared',
+    null, { timeout: 10000 });
+  const after = await page.evaluate(() => ({
+    ready: document.querySelector('#childSlots .ready').textContent,
+    faces: rxChild.faces
+  }));
+  assert.equal(after.faces, 1, 'the verdict must come from the crop the comparison will measure');
+  assert.ok(!/Cannot be compared/.test(after.ready), 'and a readable crop must stop being refused');
+});
+
+test('a crop with no face in it is still refused, after the re-check', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.evaluate(() => {
+    window.rxMeshState.landmarker = {};
+    window.rxDetect = () => null;              // nothing findable in the square any more
+    rxZoomTo(rxChild, 95);
+  });
+  await page.waitForFunction(() => document.querySelector('#childSlots .ready').textContent === 'Cannot be compared',
+    null, { timeout: 10000 });
+  const r = await page.evaluate(() => ({ faces: rxChild.faces,
+    warn: document.querySelector('#childSlots .warn').textContent }));
+  assert.equal(r.faces, 0);
+  assert.match(r.warn, /No face found inside the square/, 'the refusal has to survive when it is true');
+});

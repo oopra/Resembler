@@ -58,6 +58,14 @@ percentage — reads as far more authoritative than it has any right to.
 | **Level and normalise** | Rotate so the eyes sit level, then stretch the exposure so both faces land in the same brightness range. Lighting is the biggest false signal in photo comparison. The same linear map goes on R, G and B, so exposure moves and **hue does not** — eye and hair colour are real resemblance and are kept. |
 | **Check it is worth measuring** | Too few pixels across the head, or too soft to see an eyelid fold, and the answer would be confident noise. The photo gets a warning before it is compared. |
 
+Two details worth stating, because the app got both wrong once. The face detector needs a head to be
+roughly a fifth of the frame, so a face across a room is missed while the same face at 80 px across
+is found easily; when the first look at the whole photograph finds nothing, it looks again at the
+middle half and then the middle third rather than giving up. And the readiness verdict on each card
+is taken from **the crop the comparison will actually measure**, re-checked whenever the square
+moves — because the alternative, judging the whole photograph once on load, produced a card that
+said "no face found, frame the head by hand" and then ignored the framing.
+
 No beautifying, no smoothing, no background removal, no recognition, no matching against any
 database. "Find the head, hold it still, even out the light" is the whole of it.
 

@@ -32,6 +32,7 @@ var RX_MESH_MODEL = './models/face_landmarker.task';
    here, for the same directory. */
 var RX_MESH_BUNDLE = '../vendor/mediapipe/vision_bundle.mjs';
 var RX_DETECT_PX = 640;        // faces are found at this size; landmarks are normalised, so it costs nothing
+var RX_DETECT_ZOOMS = [1, 2, 3];  // whole photo, then the middle half, then the middle third
 var RX_MAX_YAW = 20;           // degrees off-centre before widths stop meaning anything
 var RX_MAX_PITCH = 20;
 
@@ -123,14 +124,38 @@ function rxSpread(pts){
    two ways that matter here: it works in every browser rather than only Chromium, and it knows where
    the eyes are, so the crop comes out level. The box is pushed well above the brow because a mesh
    stops at the hairline and a portrait should not. */
+/* Draw a window of the source into a RX_DETECT_PX square-ish canvas. `zoom` of 1 is the whole
+   photograph; 2 is the middle half of it, and so on. */
+function rxDetectCanvas(source, w, h, zoom){
+  var sw = w / zoom, sh = h / zoom, sx = (w - sw) / 2, sy = (h - sh) / 2;
+  var scale = Math.min(1, RX_DETECT_PX / Math.max(sw, sh));
+  var c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(sw * scale)); c.height = Math.max(1, Math.round(sh * scale));
+  c.getContext('2d').drawImage(source, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return { canvas: c, sx: sx, sy: sy, sw: sw, sh: sh };
+}
+
+/* A face has to be about a fifth of the frame before the detector will find it, so a head-and-
+   shoulders shot is easy and a face across a room is not — measured on a real photograph the app
+   had refused: found at every size down to 80 px across, missed when the face filled a fifth of the
+   width. Rather than give up and tell someone to frame it by hand, look again at the middle of the
+   photograph, where the subject of a portrait almost always is. Each attempt costs one more pass. */
 async function rxAutoFrameFromMesh(source){
   var w = rxDims(source).w, h = rxDims(source).h;
-  var scale = Math.min(1, RX_DETECT_PX / Math.max(w, h));
-  var c = document.createElement('canvas');
-  c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
-  c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
-  var got = rxDetect(c);
+  var got = null, win = null, z;
+  for(z = 0; z < RX_DETECT_ZOOMS.length; z++){
+    win = rxDetectCanvas(source, w, h, RX_DETECT_ZOOMS[z]);
+    got = rxDetect(win.canvas);
+    if(got) break;
+  }
   if(!got) return null;
+  // Landmarks come back normalised to the window that was searched; put them back in the
+  // photograph's own coordinates before anything is measured off them.
+  if(win.sw !== w || win.sh !== h){
+    got.pts = got.pts.map(function(p){
+      return [(win.sx + p[0] * win.sw) / w, (win.sy + p[1] * win.sh) / h, p[2]];
+    });
+  }
 
   var x0 = 1, x1 = 0, y0 = 1, y1 = 0;
   got.pts.forEach(function(p){
