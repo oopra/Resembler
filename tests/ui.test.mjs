@@ -924,3 +924,19 @@ test('a crop with no face in it is still refused, after the re-check', async () 
   assert.equal(r.faces, 0);
   assert.match(r.warn, /No face found inside the square/, 'the refusal has to survive when it is true');
 });
+
+test('changing the photo clears what was ticked as worn in the old one', async () => {
+  await stubMesh(page, [A]);
+  await addPhoto(page, '#childSlots .file', 1);
+  await page.check('#childSlots .worn input[value=glasses]');
+  await page.waitForFunction(() => rxChild.worn.length === 1, null, { timeout: 5000 });
+  await addPhoto(page, '#childSlots .file', 4);              // a different photograph
+  const r = await page.evaluate(() => ({
+    worn: rxChild.worn,
+    ticked: [...document.querySelectorAll('#childSlots .worn input')].filter((b) => b.checked).length,
+    warn: document.querySelector('#childSlots .warn').textContent
+  }));
+  assert.deepEqual(r.worn, [], 'a tick describes one photograph and must not outlive it');
+  assert.equal(r.ticked, 0, 'and the box has to look the way the state is');
+  assert.ok(!/glasses/i.test(r.warn), 'nor should the new photo be reported as weakened by the old one');
+});

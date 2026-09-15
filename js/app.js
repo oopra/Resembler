@@ -191,6 +191,11 @@ async function rxLoadPhoto(card, file){
   try{
     card.src = await rxDecode(file);
     card.storeBlob = null;                        // a new picture: the kept copy is stale
+    // The tick boxes describe THIS photograph, so they cannot outlive it. Left standing, a "glasses"
+    // tick from the photo you just replaced would go on quietly dropping the eye measurements from a
+    // photo with no glasses in it, and the app would report itself weakened for no reason.
+    card.worn = [];
+    Array.prototype.forEach.call(card.els.worn.querySelectorAll('input'), function(b){ b.checked = false; });
     card.dims = rxDims(card.src);
     card.frame = rxDefaultFrame(card.dims.w, card.dims.h);
     card.els.empty.hidden = true;
